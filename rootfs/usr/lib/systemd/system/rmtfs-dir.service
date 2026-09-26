@@ -1,0 +1,22 @@
+[Unit]
+Description=RMTFS service (directory backend: /var/lib/rmtfs, boots the mss remoteproc)
+Documentation=https://github.com/linux-msm/rmtfs
+# EFS images are dumped by ./build_giulia.sh --copy-efs into
+# /var/lib/rmtfs as: modem_fs1, modem_fs2, modem_fsc, modem_fsg,
+# oem_stanvbk, oem_dycnvbk  (names match upstream rmtfs storage.c)
+#
+# -s  monitor & boot the "mss" remoteproc instance once services are up
+# -o  EFS storage directory (directory backend, not raw partitions)
+# -r  add for read-only experimentation to avoid wearing NV writes
+#
+# NOTE: with -s the modem boots from here, so tqftpserv must be running
+# first (ordering is declared in tqftpserv.service).
+After=local-fs.target systemd-udevd.service tqftpserv.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rmtfs -s -o /var/lib/rmtfs
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

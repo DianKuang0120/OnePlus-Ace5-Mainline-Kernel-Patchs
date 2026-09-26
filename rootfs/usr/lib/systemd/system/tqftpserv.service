@@ -1,0 +1,22 @@
+[Unit]
+Description=TFTP over QRTR service (modem side-loading of mcfg/modem_pr files)
+Documentation=https://github.com/linux-msm/tqftpserv
+# The modem requests /readonly/vendor/firmware_mnt/image/... files
+# (mcfg_sw.mbn, modem_pr/, modem_oem/, ...) which tqftpserv resolves
+# next to the remoteproc firmware - build_giulia.sh --fw already ships
+# modem_pr/, modem_oem/ (and mcfg_sw.mbn, if present on the vendor
+# image) into /usr/lib/firmware/qcom/sm8650/oneplus/giulia/.
+# Read-write requests (/readwrite/) land in /var/lib/tqftpserv.
+#
+# Starts BEFORE rmtfs-dir.service, because rmtfs -s boots the modem.
+After=local-fs.target systemd-udevd.service
+Before=rmtfs-dir.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/lib/tqftpserv
+ExecStart=/usr/bin/tqftpserv
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

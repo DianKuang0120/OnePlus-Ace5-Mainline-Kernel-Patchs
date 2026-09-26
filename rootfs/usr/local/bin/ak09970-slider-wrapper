@@ -1,0 +1,8 @@
+#!/bin/sh
+# ak09970-sliderd wrapper
+# 位置：0=up 1=mid 2=down
+
+exec /usr/local/bin/ak09970-sliderd \
+    --up   'wpctl set-mute @DEFAULT_AUDIO_SINK@ 1' \
+    --mid  'wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.3' \
+    --down 'wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.7'

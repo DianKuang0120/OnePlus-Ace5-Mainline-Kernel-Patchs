@@ -1,0 +1,11 @@
+[Unit]
+Description=Post-boot workarounds and debugging
+After=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/giulia-post-boot.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

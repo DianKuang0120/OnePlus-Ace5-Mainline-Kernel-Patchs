@@ -1,0 +1,14 @@
+[Unit]
+Description=AK09970 alert slider daemon (OnePlus Ace 5)
+After=pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ak09970-slider-wrapper
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=default.target
