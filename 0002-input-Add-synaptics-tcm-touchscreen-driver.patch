@@ -1,0 +1,34 @@
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index aeaf9a9cbb41..dc72bc0be1f2 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -1308,6 +1308,17 @@ config TOUCHSCREEN_SX8654
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called sx8654.
+
++config TOUCHSCREEN_SYNA_TCM
++	tristate "Synaptics TouchComm (TCM) SPI touchscreen"
++	depends on SPI_MASTER
++	help
++	  Say Y here if you have a Synaptics S3910 touchscreen controller.
++
++	  If unsure, say N
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called syna_tcm.
++
+ config TOUCHSCREEN_TPS6507X
+ 	tristate "TPS6507x based touchscreens"
+ 	depends on I2C
+diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
+index f2b002abebe8..6aec98fda322 100644
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -109,6 +109,7 @@ wm97xx-ts-$(CONFIG_TOUCHSCREEN_WM9712)	+= wm9712.o
+ wm97xx-ts-$(CONFIG_TOUCHSCREEN_WM9713)	+= wm9713.o
+ obj-$(CONFIG_TOUCHSCREEN_WM97XX_MAINSTONE)	+= mainstone-wm97xx.o
+ obj-$(CONFIG_TOUCHSCREEN_SX8654)	+= sx8654.o
++obj-$(CONFIG_TOUCHSCREEN_SYNA_TCM)	+= syna_tcm.o
+ obj-$(CONFIG_TOUCHSCREEN_TPS6507X)	+= tps6507x-ts.o
+ obj-$(CONFIG_TOUCHSCREEN_ZET6223)	+= zet6223.o
+ obj-$(CONFIG_TOUCHSCREEN_ZFORCE)	+= zforce_ts.o

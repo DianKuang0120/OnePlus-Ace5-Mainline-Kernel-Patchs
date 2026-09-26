@@ -1,0 +1,1 @@
+rootfs/usr/lib/firmware/qcom/sm8650/oneplus/giulia/modem.mbn filter=lfs diff=lfs merge=lfs -text
