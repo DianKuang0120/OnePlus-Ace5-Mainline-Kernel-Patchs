@@ -789,14 +789,30 @@
  */
 &i2c6 {
 	status = "okay";
+};
 
-	/*
-	 * nfc@28 {
-	 *	   compatible = "nxp,sn220", "nxp,nxp-nci-i2c";
-	 *	   ... TODO: verify address (downstream reg 0x64?), IRQ/VEN/DWL
-	 *	   GPIOs from downstream nfc pinctrl (nfc_int/nfc_enable states)
-	 * };
-	 */
+/*
+ * NFC: NXP SN220T on qupv3_se0_i2c, which is mainline &i2c0 (0xa80000) @ 0x28.
+ * VEN=gpio34, CLKREQ=gpio35, IRQ=gpio75.  The SN220 reference clock is fed by
+ * the PMIC in hardware (requested via CLKREQ), so no AP-side clock is needed.
+ * Mainline driver: nxp-nci-i2c (nxp,nxp-nci-i2c).
+ */
+&i2c0 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	nfc@28 {
+		compatible = "nxp,nxp-nci-i2c";
+		reg = <0x28>;
+
+		interrupt-parent = <&tlmm>;
+		interrupts = <75 IRQ_TYPE_LEVEL_HIGH>;
+
+		enable-gpios = <&tlmm 34 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&nfc_int_active>, <&nfc_enable_active>;
+	};
 };
 
 &i2c8 {
@@ -811,6 +827,49 @@
 
 &i2c_master_hub_0 {
 	status = "okay";
+};
+
+/*
+ * Motion sensors (accel/gyro/alsps/mag) are not described in the AP
+ * device tree: downstream the SLPI drives them over the QUP I2C master
+ * hub. Bring up the hub instances the stock AP tree leaves disabled so
+ * the AP can probe which chips are actually wired there.
+ */
+&i2c_hub_0 {
+	status = "okay";
+};
+
+/*
+ * hub_1 (984000), hub_6 (998000) and hub_9 (9a4000) fault with a
+ * synchronous external abort on the very first SE register read.  This is
+ * not caused by the ADSP/SSC firmware (verified with remoteproc_adsp
+ * disabled) nor by the GCC clocks; those SEs are simply not accessible
+ * from the AP.  Keep them disabled so a single fault cannot abort the whole
+ * geni-i2c module load and block the remaining hub SEs.
+ */
+&i2c_hub_1 {
+	status = "disabled";
+};
+
+&i2c_hub_3 {
+	status = "okay";
+};
+
+/*
+ * hub_5 (994000) uses GPIO 74/75, but gpio74 is in gpio-reserved-ranges,
+ * so its pinctrl always fails with -EINVAL.  Disable it to avoid the noise.
+ * (gpio75 is used by the NFC IRQ below.)
+ */
+&i2c_hub_5 {
+	status = "disabled";
+};
+
+&i2c_hub_6 {
+	status = "disabled";
+};
+
+&i2c_hub_9 {
+	status = "disabled";
 };
 
 &i2c_hub_7 {
@@ -1147,6 +1206,27 @@
 	vdd3-supply = <&vreg_l5b_3p1>;
 };
 
+/*
+ * PM8550B High-Voltage Haptics (HAP525_HV) driving the LRA.
+ * CFG / PTN / HBST register bases are the three reg entries.
+ * Values taken from the downstream giulia node.
+ */
+&pm8550b {
+	pm8550b_haptics: haptics@f000 {
+		compatible = "qcom,hv-haptics";
+		reg = <0xf000 0xf100 0xf200>;
+
+		interrupts = <0x7 0xf0 0x1 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "fifo-empty";
+
+		qcom,vmax-mv = <1260>;
+		qcom,lra-period-us = <5882>;
+		qcom,brake-mode = <0>;
+		qcom,brake-pattern = /bits/ 8 <0xff 0x3f 0x1f>;
+		qcom,drv-sig-shape = <1>;
+	};
+};
+
 &pm8550vs_c {
 	status = "okay";
 };
@@ -1463,5 +1543,34 @@
 		drive-strength = <2>;
 		bias-pull-up;
 		input-enable;
+	};
+
+	/* NXP SN220T NFC: IRQ (gpio75), VEN (gpio34) + CLKREQ (gpio35) */
+	nfc_int_active: nfc-int-active-state {
+		pins = "gpio75";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	nfc_int_suspend: nfc-int-suspend-state {
+		pins = "gpio75";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	nfc_enable_active: nfc-enable-active-state {
+		pins = "gpio34", "gpio35";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	nfc_enable_suspend: nfc-enable-suspend-state {
+		pins = "gpio34", "gpio35";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
 	};
 };
