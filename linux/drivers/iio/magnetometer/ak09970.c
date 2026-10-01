@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/jiffies.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
@@ -36,13 +37,22 @@
 
 #define AK09970_MAX_REG		0x40
 
+/* Coalesce reads within this window so X/Y/Z come from the same sample. */
+#define AK09970_CACHE_TTL	msecs_to_jiffies(100)
+
 struct ak09970_data {
 	struct regmap *regmap;
 	struct device *dev;
 	struct regulator_bulk_data supplies[2];
 	struct gpio_desc *reset_gpio;
 	bool powered;
-	struct mutex lock;	/* serialize reads */
+
+	/* sample cache */
+	s16 cached_x, cached_y, cached_z;
+	unsigned long cache_jiffies;
+	bool cache_valid;
+
+	struct mutex lock;
 };
 
 static const struct regmap_config ak09970_regmap_config = {
@@ -96,6 +106,8 @@ static int ak09970_init(struct ak09970_data *data)
 		return dev_err_probe(data->dev, -ENODEV,
 				     "bad device ID 0x%04x\n", id);
 
+	dev_info(data->dev, "AK09970 detected, DID 0x%04x\n", id);
+
 	ret = regmap_write(data->regmap, AK09970_REG_SRST, AK09970_SRST_RESET);
 	if (ret)
 		return ret;
@@ -145,27 +157,46 @@ static int ak09970_read_raw(struct iio_dev *indio_dev,
 			    int *val, int *val2, long mask)
 {
 	struct ak09970_data *data = iio_priv(indio_dev);
-	s16 x, y, z;
 	int ret;
 
 	if (mask != IIO_CHAN_INFO_RAW)
 		return -EINVAL;
 
 	mutex_lock(&data->lock);
-	ret = pm_runtime_resume_and_get(data->dev);
-	if (ret)
-		goto out_unlock;
 
-	ret = ak09970_read_xyz(data, &x, &y, &z);
-	pm_runtime_put_autosuspend(data->dev);
-	if (ret)
-		goto out_unlock;
+	if (!data->cache_valid ||
+	    time_after(jiffies, data->cache_jiffies + AK09970_CACHE_TTL)) {
+		s16 x, y, z;
+
+		ret = pm_runtime_resume_and_get(data->dev);
+		if (ret)
+			goto out_unlock;
+
+		int tries;
+		for (tries = 0; tries < 20; tries++) {
+			ret = ak09970_read_xyz(data, &x, &y, &z);
+			if (ret != -EAGAIN)
+				break;
+			usleep_range(10000, 15000);
+		}
+		pm_runtime_put_autosuspend(data->dev);
+		if (ret)
+			goto out_unlock;
+
+		data->cached_x = x;
+		data->cached_y = y;
+		data->cached_z = z;
+		data->cache_jiffies = jiffies;
+		data->cache_valid = true;
+	}
 
 	switch (chan->address) {
-	case 0: *val = x; break;
-	case 1: *val = y; break;
-	case 2: *val = z; break;
-	default: ret = -EINVAL; goto out_unlock;
+	case 0: *val = data->cached_x; break;
+	case 1: *val = data->cached_y; break;
+	case 2: *val = data->cached_z; break;
+	default:
+		ret = -EINVAL;
+		goto out_unlock;
 	}
 
 	ret = IIO_VAL_INT;
@@ -191,6 +222,7 @@ static int ak09970_probe(struct i2c_client *client)
 	data = iio_priv(indio_dev);
 	data->dev = &client->dev;
 	mutex_init(&data->lock);
+	i2c_set_clientdata(client, indio_dev);
 
 	data->regmap = devm_regmap_init_i2c(client, &ak09970_regmap_config);
 	if (IS_ERR(data->regmap))
@@ -202,7 +234,8 @@ static int ak09970_probe(struct i2c_client *client)
 	ret = devm_regulator_bulk_get(&client->dev, ARRAY_SIZE(data->supplies),
 				      data->supplies);
 	if (ret)
-		return dev_err_probe(&client->dev, ret, "regulator get failed\n");
+		return dev_err_probe(&client->dev, ret,
+				     "regulator get failed\n");
 
 	data->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
 						   GPIOD_OUT_LOW);
@@ -210,36 +243,42 @@ static int ak09970_probe(struct i2c_client *client)
 		return dev_err_probe(&client->dev, PTR_ERR(data->reset_gpio),
 				     "reset gpio get failed\n");
 
+	/* 打开电源，让 chip 上电并初始化 */
 	ret = ak09970_power_on(data);
 	if (ret)
 		return dev_err_probe(&client->dev, ret, "power on failed\n");
 
 	ret = ak09970_init(data);
-	if (ret) {
-		ak09970_power_off(data);
-		return dev_err_probe(&client->dev, ret, "chip init failed\n");
-	}
+	if (ret)
+		goto err_power_off;
 
 	indio_dev->name = AK09970_DRV_NAME;
 	indio_dev->info = &ak09970_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = ak09970_channels;
 	indio_dev->num_channels = ARRAY_SIZE(ak09970_channels);
+	indio_dev->dev.of_node = client->dev.of_node;
 
-	pm_runtime_set_active(&client->dev);
-	pm_runtime_set_autosuspend_delay(&client->dev, 1000);
-	pm_runtime_use_autosuspend(&client->dev);
-	pm_runtime_enable(&client->dev);
+	/* 关键：标准的 runtime PM 初始化顺序 */
+    pm_runtime_set_active(&client->dev);
+    pm_runtime_enable(&client->dev);
+    pm_runtime_set_autosuspend_delay(&client->dev, 1000);
+    pm_runtime_use_autosuspend(&client->dev);
+    pm_runtime_mark_last_busy(&client->dev);
+    pm_runtime_put_autosuspend(&client->dev);
 
 	ret = devm_iio_device_register(&client->dev, indio_dev);
 	if (ret) {
 		pm_runtime_disable(&client->dev);
-		ak09970_power_off(data);
-		return dev_err_probe(&client->dev, ret, "iio register failed\n");
+		pm_runtime_set_suspended(&client->dev);
+		goto err_power_off;
 	}
 
-	i2c_set_clientdata(client, indio_dev);
 	return 0;
+
+err_power_off:
+	ak09970_power_off(data);
+	return dev_err_probe(&client->dev, ret, "chip init failed\n");
 }
 
 static void ak09970_remove(struct i2c_client *client)
@@ -248,7 +287,9 @@ static void ak09970_remove(struct i2c_client *client)
 	struct ak09970_data *data = iio_priv(indio_dev);
 
 	pm_runtime_disable(&client->dev);
-	ak09970_power_off(data);
+	if (!pm_runtime_status_suspended(&client->dev))
+		ak09970_power_off(data);
+	pm_runtime_set_suspended(&client->dev);
 }
 
 static int ak09970_runtime_suspend(struct device *dev)
@@ -270,7 +311,11 @@ static int ak09970_runtime_resume(struct device *dev)
 	ret = ak09970_power_on(data);
 	if (ret)
 		return ret;
-	return ak09970_init(data);
+
+	ret = ak09970_init(data);
+	if (ret)
+		ak09970_power_off(data);
+	return ret;
 }
 
 static DEFINE_RUNTIME_DEV_PM_OPS(ak09970_pm_ops,
@@ -279,6 +324,7 @@ static DEFINE_RUNTIME_DEV_PM_OPS(ak09970_pm_ops,
 
 static const struct of_device_id ak09970_of_match[] = {
 	{ .compatible = "asahi-kasei,ak09970" },
+	{ .compatible = "oplus,dhall-ak09970" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, ak09970_of_match);

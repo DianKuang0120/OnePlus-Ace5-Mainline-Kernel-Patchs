@@ -323,6 +323,13 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		vreg_l1b_1p8: ldo1 {
+			regulator-name = "vreg_l1b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		vreg_l2b_3p0: ldo2 {
 			regulator-name = "vreg_l2b_3p0";
 			regulator-min-microvolt = <3008000>;
@@ -1410,5 +1417,51 @@
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&sc8547_slave_int_default>;
+	};
+};
+
+/* ---------- AK09970 hall-effect slider ---------- */
+&i2c_hub_8 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	magnetometer: magnetometer@10 {
+		compatible = "asahi-kasei,ak09970";
+		reg = <0x10>;
+
+		vdd-supply = <&vreg_l1b_1p8>;
+		vddio-supply = <&vreg_l1b_1p8>;
+
+		#io-channel-cells = <1>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&hall_interrupt_input>;
+	};
+};
+
+/ {
+    ak09970-slider {
+    	compatible = "oneplus,ak09970-slider";
+    
+    	io-channels = <&magnetometer 0>,
+    		      <&magnetometer 1>,
+    		      <&magnetometer 2>;
+    	io-channel-names = "x", "y", "z";
+    
+    	oneplus,up-threshold = <5000>;
+    	oneplus,mid-threshold = <22000>;
+    
+    	interrupt-parent = <&tlmm>;
+    	interrupts = <99 IRQ_TYPE_LEVEL_LOW>;
+	};
+};
+
+&tlmm {
+	hall_interrupt_input: hall-interrupt-input-state {
+		pins = "gpio99";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
 	};
 };
