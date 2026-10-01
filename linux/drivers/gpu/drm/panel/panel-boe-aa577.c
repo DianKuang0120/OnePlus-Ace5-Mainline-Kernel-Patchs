@@ -11,11 +11,14 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regulator/consumer.h>
+#include <linux/string.h>
 
 #include <video/mipi_display.h>
 
 #include <drm/display/drm_dsc.h>
 #include <drm/display/drm_dsc_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_panel.h>
@@ -27,6 +30,7 @@ struct panel_aa577_p_3_a0020_dsc {
 	struct drm_dsc_config dsc;
 	struct regulator_bulk_data supplies[3];
 	struct gpio_desc *reset_gpio;
+	struct drm_connector *connector;
 };
 
 static inline
@@ -45,9 +49,153 @@ static void panel_aa577_p_3_a0020_dsc_reset(struct panel_aa577_p_3_a0020_dsc *ct
 	msleep(25);
 }
 
+/*
+ * The vendor keeps the DSI link (qcom,mdss-dsi-panel-clockrate and
+ * qcom,mdss-dsi-panel-phy-timings, 1094.4 Mbps) fixed for every refresh
+ * rate and only changes the panel's internal frame rate. Mainline msm
+ * instead derives the DSI byte clock from the mode's pixel clock:
+ *
+ *	dsi_pclk = mode->clock * (htotal - hdisplay + new_hdisplay) / htotal
+ *
+ * where new_hdisplay is the DSC-compressed width. A plain lower pixel
+ * clock at 90/60 Hz therefore also lowers the link rate, which the panel
+ * does not tolerate at 60 Hz. Instead, grow the horizontal blanking and
+ * pick a pixel clock so that the expression above (and hence the DSI
+ * byte clock) stays at the 120 Hz value, while the refresh rate drops.
+ *
+ * The vertical total is kept at the vendor value: msm programs the
+ * command-mode tear check with height = vtotal * 2, which overflows the
+ * hardware field for the very large vtotals a constant pixel clock would
+ * otherwise need.
+ */
+#define PANEL_AA577_P_3_A0020_MODE(_clock, _htotal, _vtotal, _type)		\
+	{									\
+		.clock = (_clock),						\
+		.hdisplay = 1264,						\
+		.hsync_start = (_htotal) - 28,					\
+		.hsync_end = (_htotal) - 26,					\
+		.htotal = (_htotal),						\
+		.vdisplay = 2780,						\
+		.vsync_start = (_vtotal) - 42 - 2,				\
+		.vsync_end = (_vtotal) - 42,					\
+		.vtotal = (_vtotal),						\
+		.width_mm = 71,							\
+		.height_mm = 157,						\
+		.type = DRM_MODE_TYPE_DRIVER | (_type),				\
+	}
+
+enum panel_aa577_p_3_a0020_refresh {
+	PANEL_AA577_P_3_A0020_REFRESH_120,
+	PANEL_AA577_P_3_A0020_REFRESH_90,
+	PANEL_AA577_P_3_A0020_REFRESH_60,
+};
+
+static const struct drm_display_mode panel_aa577_p_3_a0020_dsc_modes[] = {
+	[PANEL_AA577_P_3_A0020_REFRESH_120] =
+		PANEL_AA577_P_3_A0020_MODE(455817, 1318, 2882,
+					   DRM_MODE_TYPE_PREFERRED),
+	[PANEL_AA577_P_3_A0020_REFRESH_90] =
+		PANEL_AA577_P_3_A0020_MODE(456687, 1318, 3850, 0),
+	[PANEL_AA577_P_3_A0020_REFRESH_60] =
+		PANEL_AA577_P_3_A0020_MODE(455886, 1900, 3999, 0),
+};
+
+/*
+ * The panel runs at 120 Hz after the init sequence; 90 Hz and 60 Hz are
+ * selected by writing the vendor timing-switch sequence for the mode the
+ * display controller is currently programmed with.
+ */
+static void
+panel_aa577_p_3_a0020_dsc_timing_switch(struct mipi_dsi_multi_context *dsi_ctx,
+					enum panel_aa577_p_3_a0020_refresh refresh)
+{
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xff, 0x5a, 0xa5, 0x00);
+	switch (refresh) {
+	case PANEL_AA577_P_3_A0020_REFRESH_90:
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x60, 0x02);
+		break;
+	default:
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x60, 0x00);
+		break;
+	}
+
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xff, 0x5a, 0xa5, 0x02);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0,
+				     0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x00,
+				     0x00);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xff, 0x5a, 0xa5, 0x2d);
+
+	switch (refresh) {
+	case PANEL_AA577_P_3_A0020_REFRESH_90:
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x85, 0x00, 0x00);
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xf2, 0x00);
+		break;
+	case PANEL_AA577_P_3_A0020_REFRESH_60:
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x83, 0x01, 0x00);
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xf2, 0x01);
+		break;
+	default:
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x83, 0x00, 0x00);
+		mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xf2, 0x00);
+		break;
+	}
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xff, 0x5a, 0xa5, 0x00);
+}
+
+static enum panel_aa577_p_3_a0020_refresh
+panel_aa577_p_3_a0020_dsc_get_refresh(struct panel_aa577_p_3_a0020_dsc *ctx)
+{
+	struct drm_connector *connector = ctx->connector;
+	struct drm_crtc_state *crtc_state;
+	int i;
+
+	if (!connector || !connector->state || !connector->state->crtc)
+		return PANEL_AA577_P_3_A0020_REFRESH_120;
+
+	crtc_state = connector->state->crtc->state;
+	if (!crtc_state)
+		return PANEL_AA577_P_3_A0020_REFRESH_120;
+
+	for (i = 0; i < ARRAY_SIZE(panel_aa577_p_3_a0020_dsc_modes); i++) {
+		if (drm_mode_match(&crtc_state->mode,
+				   &panel_aa577_p_3_a0020_dsc_modes[i],
+				   DRM_MODE_MATCH_TIMINGS | DRM_MODE_MATCH_CLOCK))
+			return i;
+	}
+
+	return PANEL_AA577_P_3_A0020_REFRESH_120;
+}
+
+/*
+ * Vendor page 0x07, register 0x81 (DSC/CTB configuration). The 120 Hz and
+ * 90/60 Hz init tables only differ in the byte right before the five
+ * trailing zero bytes: 120 Hz uses 0x74, 90/60 Hz use 0x00.
+ */
+static const u8 panel_aa577_p_3_a0020_dsc_cfg[] = {
+	0x81,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x00,
+	0x00, 0xab, 0x30, 0x80, 0x0a, 0xdc, 0x04,
+	0xf0, 0x00, 0x14, 0x02, 0x78, 0x02, 0x78,
+	0x02, 0x00, 0x02, 0x57, 0x00, 0x20, 0x01,
+	0xf8, 0x00, 0x08, 0x00, 0x0d, 0x05, 0x7a,
+	0x04, 0x4f, 0x18, 0x00, 0x10, 0xe0, 0x07,
+	0x10, 0x20, 0x00, 0x06, 0x0f, 0x0f, 0x33,
+	0x0e, 0x1c, 0x2a, 0x38, 0x46, 0x54, 0x62,
+	0x69, 0x70, 0x77, 0x79, 0x7b, 0x7d, 0x7e,
+	0x02, 0x02, 0x22, 0x00, 0x2a, 0x40, 0x2a,
+	0xbe, 0x3a, 0xfc, 0x3a, 0xfa, 0x3a, 0xf8,
+	0x3b, 0x38, 0x3b, 0x78, 0x3b, 0xb6, 0x4b,
+	0xb6, 0x4b, 0xf4, 0x4b, 0xf4, 0x6c, 0x34,
+	0x84, 0x74, 0x74, 0x00, 0x00, 0x00, 0x00,
+	0x00,
+};
+
 static int panel_aa577_p_3_a0020_dsc_on(struct panel_aa577_p_3_a0020_dsc *ctx)
 {
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
+	enum panel_aa577_p_3_a0020_refresh refresh =
+		panel_aa577_p_3_a0020_dsc_get_refresh(ctx);
+	u8 dsc_cfg[ARRAY_SIZE(panel_aa577_p_3_a0020_dsc_cfg)];
 
 	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
@@ -56,22 +204,10 @@ static int panel_aa577_p_3_a0020_dsc_on(struct panel_aa577_p_3_a0020_dsc *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xff, 0x5a, 0xa5, 0x07);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x8a, 0x01);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x8b, 0x21, 0xe0);
-	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x81,
-				     0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x00,
-				     0x00, 0xab, 0x30, 0x80, 0x0a, 0xdc, 0x04,
-				     0xf0, 0x00, 0x14, 0x02, 0x78, 0x02, 0x78,
-				     0x02, 0x00, 0x02, 0x57, 0x00, 0x20, 0x01,
-				     0xf8, 0x00, 0x08, 0x00, 0x0d, 0x05, 0x7a,
-				     0x04, 0x4f, 0x18, 0x00, 0x10, 0xe0, 0x07,
-				     0x10, 0x20, 0x00, 0x06, 0x0f, 0x0f, 0x33,
-				     0x0e, 0x1c, 0x2a, 0x38, 0x46, 0x54, 0x62,
-				     0x69, 0x70, 0x77, 0x79, 0x7b, 0x7d, 0x7e,
-				     0x02, 0x02, 0x22, 0x00, 0x2a, 0x40, 0x2a,
-				     0xbe, 0x3a, 0xfc, 0x3a, 0xfa, 0x3a, 0xf8,
-				     0x3b, 0x38, 0x3b, 0x78, 0x3b, 0xb6, 0x4b,
-				     0xb6, 0x4b, 0xf4, 0x4b, 0xf4, 0x6c, 0x34,
-				     0x84, 0x74, 0x74, 0x00, 0x00, 0x00, 0x00,
-				     0x00);
+	memcpy(dsc_cfg, panel_aa577_p_3_a0020_dsc_cfg, sizeof(dsc_cfg));
+	if (refresh != PANEL_AA577_P_3_A0020_REFRESH_120)
+		dsc_cfg[sizeof(dsc_cfg) - 6] = 0x00;
+	mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, dsc_cfg, sizeof(dsc_cfg));
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xff, 0x5a, 0xa5, 0x49);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xd9, 0x02);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xda, 0xf7);
@@ -1114,6 +1250,8 @@ static int panel_aa577_p_3_a0020_dsc_on(struct panel_aa577_p_3_a0020_dsc *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x29, 0x00);
 	mipi_dsi_msleep(&dsi_ctx, 20);
 
+	panel_aa577_p_3_a0020_dsc_timing_switch(&dsi_ctx, refresh);
+
 	return dsi_ctx.accum_err;
 }
 
@@ -1242,25 +1380,30 @@ static int panel_aa577_p_3_a0020_dsc_unprepare(struct drm_panel *panel)
 	return 0;
 }
 
-static const struct drm_display_mode panel_aa577_p_3_a0020_dsc_mode = {
-	.clock = (1264 + 26 + 2 + 26) * (2780 + 58 + 2 + 42) * 120 / 1000,
-	.hdisplay = 1264,
-	.hsync_start = 1264 + 26,
-	.hsync_end = 1264 + 26 + 2,
-	.htotal = 1264 + 26 + 2 + 26,
-	.vdisplay = 2780,
-	.vsync_start = 2780 + 58,
-	.vsync_end = 2780 + 58 + 2,
-	.vtotal = 2780 + 58 + 2 + 42,
-	.width_mm = 71,
-	.height_mm = 157,
-	.type = DRM_MODE_TYPE_DRIVER,
-};
-
 static int panel_aa577_p_3_a0020_dsc_get_modes(struct drm_panel *panel,
 					       struct drm_connector *connector)
 {
-	return drm_connector_helper_get_modes_fixed(connector, &panel_aa577_p_3_a0020_dsc_mode);
+	struct panel_aa577_p_3_a0020_dsc *ctx = to_panel_aa577_p_3_a0020_dsc(panel);
+	struct drm_display_mode *mode;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(panel_aa577_p_3_a0020_dsc_modes); i++) {
+		mode = drm_mode_duplicate(connector->dev,
+					  &panel_aa577_p_3_a0020_dsc_modes[i]);
+		if (!mode)
+			return -ENOMEM;
+
+		drm_mode_probed_add(connector, mode);
+	}
+
+	connector->display_info.width_mm =
+		panel_aa577_p_3_a0020_dsc_modes[0].width_mm;
+	connector->display_info.height_mm =
+		panel_aa577_p_3_a0020_dsc_modes[0].height_mm;
+
+	ctx->connector = connector;
+
+	return ARRAY_SIZE(panel_aa577_p_3_a0020_dsc_modes);
 }
 
 static const struct drm_panel_funcs panel_aa577_p_3_a0020_dsc_panel_funcs = {
