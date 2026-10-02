@@ -37,7 +37,9 @@ fi
 
 say "daemon user service"
 systemctl --user daemon-reload
-systemctl --user enable --now giulia-hapticd.service
+systemctl --user enable giulia-hapticd.service
+# restart even if already running, so a replaced binary takes effect
+systemctl --user restart giulia-hapticd.service
 sleep 1
 systemctl --user --no-pager status giulia-hapticd.service | head -5
 
