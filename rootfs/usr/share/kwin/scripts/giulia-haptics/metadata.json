@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "DianKuang"
+            }
+        ],
+        "Description": "Forward window events (maximize, snap, minimize) to the giulia haptics daemon",
+        "Description[zh_CN]": "把窗口事件（最大化/吸附/最小化）转发给 giulia 震动守护",
+        "Icon": "preferences-system-windows-script-test",
+        "Id": "giulia-haptics",
+        "License": "GPL-2.0-or-later",
+        "Name": "Giulia Haptics",
+        "Name[zh_CN]": "Giulia 震动反馈"
+    },
+    "X-Plasma-API": "javascript"
+}

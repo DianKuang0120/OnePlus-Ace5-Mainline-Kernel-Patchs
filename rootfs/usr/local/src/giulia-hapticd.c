@@ -19,8 +19,13 @@
  *
  * Event names used in the config:
  *   power, volume_up, volume_down, slider_up, slider_mid, slider_down,
- *   notification, ui_desktop, ui_showdesktop
+ *   notification, ui_desktop, ui_showdesktop, ui_maximize, ui_snap,
+ *   ui_minimize
  * Any event whose effect id is 0 is ignored.
+ *
+ * A session D-Bus method org.giulia.Haptic.Trigger(s) (at
+ * /org/giulia/Haptic) lets other components -- e.g. the bundled KWin
+ * "Giulia Haptics" script -- trigger any named event.
  */
 
 #define _GNU_SOURCE
@@ -37,6 +42,7 @@
 
 #include <dirent.h>
 #include <linux/input.h>
+#include <systemd/sd-bus.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
@@ -368,6 +374,52 @@ static void start_fifo(const char *path)
 	fifo_fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
 }
 
+/* ---- dbus service (org.giulia.Haptic) -------------------------------- */
+
+static sd_bus *bus;
+
+static int method_trigger(sd_bus_message *m, void *userdata,
+			  sd_bus_error *ret_error)
+{
+	const char *event;
+	int r;
+
+	r = sd_bus_message_read(m, "s", &event);
+	if (r < 0)
+		return r;
+	play(event);
+	(void)userdata;
+	(void)ret_error;
+	return sd_bus_reply_method_return(m, NULL);
+}
+
+static const sd_bus_vtable haptic_vtable[] = {
+	SD_BUS_VTABLE_START(0),
+	SD_BUS_METHOD("Trigger", "s", "", method_trigger,
+		      SD_BUS_VTABLE_UNPRIVILEGED),
+	SD_BUS_VTABLE_END
+};
+
+static void start_dbus_service(void)
+{
+	int r;
+
+	r = sd_bus_default_user(&bus);
+	if (r < 0)
+		goto fail;
+	r = sd_bus_add_object_vtable(bus, NULL, "/org/giulia/Haptic",
+				     "org.giulia.Haptic", haptic_vtable, NULL);
+	if (r < 0)
+		goto fail;
+	sd_bus_request_name(bus, "org.giulia.Haptic", 0);
+	return;
+fail:
+	if (bus) {
+		sd_bus_unref(bus);
+		bus = NULL;
+	}
+}
+
 /* ---- main ------------------------------------------------------------ */
 
 int main(int argc, char **argv)
@@ -375,7 +427,7 @@ int main(int argc, char **argv)
 	const char *cfg = "/etc/giulia-hapticd.conf";
 	char fifo[128];
 	const char *rundir;
-	struct pollfd fds[MAX_DEVS + MAX_WATCHES + 1];
+	struct pollfd fds[MAX_DEVS + MAX_WATCHES + 2];
 	int i;
 
 	signal(SIGCHLD, SIG_IGN);
@@ -392,6 +444,7 @@ int main(int argc, char **argv)
 	snprintf(fifo, sizeof(fifo), "%s/giulia-hapticd.fifo",
 		 rundir ? rundir : "/tmp");
 	start_fifo(fifo);
+	start_dbus_service();
 
 	for (;;) {
 		struct dev *d;
@@ -424,9 +477,18 @@ int main(int argc, char **argv)
 			fds[n].events = POLLIN;
 			n++;
 		}
+		if (bus) {
+			int ev = sd_bus_get_events(bus);
+
+			fds[n].fd = sd_bus_get_fd(bus);
+			fds[n].events = ev > 0 ? ev : POLLIN;
+			n++;
+		}
 
 		if (poll(fds, n, 5000) <= 0) {
 			/* Rescan occasionally in case a device appeared */
+			if (bus)
+				sd_bus_process(bus, NULL);
 			scan_devices();
 			continue;
 		}
@@ -436,6 +498,21 @@ int main(int argc, char **argv)
 
 			if (!(fds[i].revents & POLLIN))
 				continue;
+
+			if (bus && fds[i].fd == sd_bus_get_fd(bus)) {
+				int r;
+
+				do {
+					r = sd_bus_process(bus, NULL);
+				} while (r > 0);
+				if (r < 0) {
+					sd_bus_unref(bus);
+					bus = NULL;
+				} else {
+					sd_bus_flush(bus);
+				}
+				continue;
+			}
 
 			if (fds[i].fd == fifo_fd) {
 				char buf[256];
