@@ -19,7 +19,7 @@
  *
  * Event names used in the config:
  *   power, volume_up, volume_down, slider_up, slider_mid, slider_down,
- *   notification
+ *   notification, ui_desktop, ui_showdesktop
  * Any event whose effect id is 0 is ignored.
  */
 
@@ -38,12 +38,14 @@
 #include <dirent.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
 #define MAX_DEVS	16
 #define MAX_EVENTS	16
+#define MAX_WATCHES	8
 #define NAME_LEN	64
 #define STR_LEN		128
 
@@ -59,6 +61,33 @@ struct dev {
 	int		is_slider;
 };
 
+/*
+ * Desktop events are watched by running one dbus-monitor per entry and
+ * playing "event" when the matching message contains "needle".
+ */
+struct dbus_watch {
+	const char	*rule;
+	const char	*needle;
+	const char	*event;
+	int		fd;
+	long		last_try;
+	char		buf[1024];
+	size_t		len;
+};
+
+static struct dbus_watch watches[] = {
+	{ "interface='org.freedesktop.Notifications',member='Notify'",
+	  "member=Notify", "notification", -1, 0, { 0 }, 0 },
+	{ "type='signal',path='/VirtualDesktopManager',"
+	  "interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+	  "current", "ui_desktop", -1, 0, { 0 }, 0 },
+	{ "type='signal',sender='org.kde.KWin',path='/KWin',"
+	  "interface='org.kde.KWin',member='showingDesktopChanged'",
+	  "member=showingDesktopChanged", "ui_showdesktop", -1, 0, { 0 }, 0 },
+};
+
+static const int n_watches = sizeof(watches) / sizeof(watches[0]);
+
 static const char *cfg_player = "/usr/local/bin/qcom-haptics-play";
 static int cfg_gain = 100;
 static long cfg_min_gap_ms = 40;
@@ -71,11 +100,7 @@ static const char *dev_voldown = "gpio-keys";
 static const char *dev_slider = "ak09970-slider";
 
 static struct dev *devs;
-static int dbus_fd = -1;
 static int fifo_fd = -1;
-static char dbus_buf[4096];
-static size_t dbus_len;
-static long last_dbus_try;
 
 static long now_ms(void)
 {
@@ -183,6 +208,7 @@ static void play(const char *name)
 	if (pid == 0) {
 		char e[16], g[16];
 
+		prctl(PR_SET_PDEATHSIG, SIGKILL);
 		snprintf(e, sizeof(e), "%d", effect);
 		snprintf(g, sizeof(g), "%d", gain);
 		execl(cfg_player, cfg_player, "-e", e, "-g", g, (char *)NULL);
@@ -283,13 +309,14 @@ static void handle_event(const char *devname, int is_slider,
 	(void)devname;
 }
 
-/* ---- dbus monitor (notifications) ------------------------------------ */
+/* ---- dbus watches (desktop events) ----------------------------------- */
 
-static void start_dbus_monitor(void)
+static void start_watch(struct dbus_watch *w)
 {
 	int p[2];
 	pid_t pid;
 
+	w->len = 0;
 	if (pipe(p) < 0)
 		return;
 	pid = fork();
@@ -302,14 +329,35 @@ static void start_dbus_monitor(void)
 		dup2(p[1], STDOUT_FILENO);
 		close(p[0]);
 		close(p[1]);
-		execlp("dbus-monitor", "dbus-monitor",
-		       "interface='org.freedesktop.Notifications',member='Notify'",
-		       (char *)NULL);
+		prctl(PR_SET_PDEATHSIG, SIGKILL);
+		execlp("dbus-monitor", "dbus-monitor", w->rule, (char *)NULL);
 		_exit(127);
 	}
 	close(p[1]);
-	dbus_fd = p[0];
-	fcntl(dbus_fd, F_SETFL, O_NONBLOCK);
+	w->fd = p[0];
+	fcntl(w->fd, F_SETFL, O_NONBLOCK);
+}
+
+static void handle_watch(struct dbus_watch *w)
+{
+	ssize_t r = read(w->fd, w->buf + w->len,
+			 sizeof(w->buf) - w->len - 1);
+
+	if (r > 0) {
+		w->len += r;
+		w->buf[w->len] = 0;
+		if (strstr(w->buf, w->needle)) {
+			play(w->event);
+			w->len = 0;
+		} else if (w->len > sizeof(w->buf) - 256) {
+			w->len = 0;
+		}
+	} else if (r == 0 || (r < 0 && errno != EAGAIN &&
+			      errno != EWOULDBLOCK)) {
+		close(w->fd);
+		w->fd = -1;
+		w->len = 0;
+	}
 }
 
 /* ---- control fifo ---------------------------------------------------- */
@@ -327,7 +375,7 @@ int main(int argc, char **argv)
 	const char *cfg = "/etc/giulia-hapticd.conf";
 	char fifo[128];
 	const char *rundir;
-	struct pollfd fds[MAX_DEVS + 2];
+	struct pollfd fds[MAX_DEVS + MAX_WATCHES + 1];
 	int i;
 
 	signal(SIGCHLD, SIG_IGN);
@@ -340,7 +388,6 @@ int main(int argc, char **argv)
 
 	read_config(cfg);
 	scan_devices();
-	start_dbus_monitor();
 	rundir = getenv("XDG_RUNTIME_DIR");
 	snprintf(fifo, sizeof(fifo), "%s/giulia-hapticd.fifo",
 		 rundir ? rundir : "/tmp");
@@ -348,11 +395,16 @@ int main(int argc, char **argv)
 
 	for (;;) {
 		struct dev *d;
+		long now;
 		int n = 0;
 
-		if (dbus_fd < 0 && now_ms() - last_dbus_try > 5000) {
-			last_dbus_try = now_ms();
-			start_dbus_monitor();
+		now = now_ms();
+		for (i = 0; i < n_watches; i++) {
+			if (watches[i].fd < 0 &&
+			    now - watches[i].last_try > 5000) {
+				watches[i].last_try = now;
+				start_watch(&watches[i]);
+			}
 		}
 
 		for (d = devs; d; d = d->next) {
@@ -360,10 +412,12 @@ int main(int argc, char **argv)
 			fds[n].events = POLLIN;
 			n++;
 		}
-		if (dbus_fd >= 0) {
-			fds[n].fd = dbus_fd;
-			fds[n].events = POLLIN;
-			n++;
+		for (i = 0; i < n_watches; i++) {
+			if (watches[i].fd >= 0) {
+				fds[n].fd = watches[i].fd;
+				fds[n].events = POLLIN;
+				n++;
+			}
 		}
 		if (fifo_fd >= 0) {
 			fds[n].fd = fifo_fd;
@@ -378,32 +432,12 @@ int main(int argc, char **argv)
 		}
 
 		for (i = 0; i < n; i++) {
+			int j, handled = 0;
+
 			if (!(fds[i].revents & POLLIN))
 				continue;
-			if (fds[i].fd == dbus_fd) {
-				ssize_t r = read(dbus_fd, dbus_buf + dbus_len,
-						 sizeof(dbus_buf) - dbus_len - 1);
 
-				if (r > 0) {
-					dbus_len += r;
-					dbus_buf[dbus_len] = 0;
-					if (strstr(dbus_buf, "member=Notify")) {
-						play("notification");
-						dbus_len = 0;
-					} else if (dbus_len >
-						   sizeof(dbus_buf) - 1024) {
-						memmove(dbus_buf,
-							dbus_buf + dbus_len - 512,
-							513);
-						dbus_len = 512;
-					}
-				} else if (r == 0 || (r < 0 && errno != EAGAIN &&
-						      errno != EWOULDBLOCK)) {
-					close(dbus_fd);
-					dbus_fd = -1;
-					dbus_len = 0;
-				}
-			} else if (fds[i].fd == fifo_fd) {
+			if (fds[i].fd == fifo_fd) {
 				char buf[256];
 				ssize_t r = read(fifo_fd, buf, sizeof(buf) - 1);
 
@@ -416,15 +450,31 @@ int main(int argc, char **argv)
 						if (*tok)
 							play(tok);
 				}
-			} else {
+				continue;
+			}
+
+			for (j = 0; j < n_watches; j++) {
+				if (fds[i].fd == watches[j].fd) {
+					handle_watch(&watches[j]);
+					handled = 1;
+					break;
+				}
+			}
+			if (handled)
+				continue;
+
+			{
 				struct input_event ev;
 				struct dev *d;
 
-				for (d = devs; d && d->fd != fds[i].fd; d = d->next)
+				for (d = devs; d && d->fd != fds[i].fd;
+				     d = d->next)
 					;
-				while (read(fds[i].fd, &ev, sizeof(ev)) == sizeof(ev))
+				while (read(fds[i].fd, &ev, sizeof(ev)) ==
+				       sizeof(ev))
 					if (d)
-						handle_event(d->name, d->is_slider, &ev);
+						handle_event(d->name,
+							     d->is_slider, &ev);
 			}
 		}
 	}
