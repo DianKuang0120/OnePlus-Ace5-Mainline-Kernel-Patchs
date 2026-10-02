@@ -194,7 +194,7 @@ static void play(const char *name)
 	static long last;
 	long t;
 	int effect;
-	int gain;
+	int magnitude;
 	pid_t pid;
 
 	effect = event_effect(name);
@@ -206,7 +206,16 @@ static void play(const char *name)
 		return;
 	last = t;
 
-	gain = cfg_gain ? cfg_gain : 100;
+	/*
+	 * cfg_gain is a percentage (0..100); qcom-haptics-play -g expects the
+	 * raw FF periodic magnitude, and the driver scales it as
+	 * vmax = magnitude * fifo_vmax_mv / 0x7fff.  Passing a percentage
+	 * straight through would drive ~0.3% of vmax.
+	 */
+	if (cfg_gain <= 0 || cfg_gain >= 100)
+		magnitude = 0x7fff;
+	else
+		magnitude = cfg_gain * 0x7fff / 100;
 
 	pid = fork();
 	if (pid < 0)
@@ -216,7 +225,7 @@ static void play(const char *name)
 
 		prctl(PR_SET_PDEATHSIG, SIGKILL);
 		snprintf(e, sizeof(e), "%d", effect);
-		snprintf(g, sizeof(g), "%d", gain);
+		snprintf(g, sizeof(g), "%d", magnitude);
 		execl(cfg_player, cfg_player, "-e", e, "-g", g, (char *)NULL);
 		_exit(127);
 	}
