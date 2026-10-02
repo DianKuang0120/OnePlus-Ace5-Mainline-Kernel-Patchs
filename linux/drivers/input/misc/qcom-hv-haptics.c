@@ -7081,6 +7081,7 @@ static const struct of_device_id haptics_match_table[] = {
 	},
 	{},
 };
+MODULE_DEVICE_TABLE(of, haptics_match_table);
 
 static struct platform_driver haptics_driver = {
 	.driver		= {
