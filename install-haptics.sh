@@ -55,4 +55,4 @@ fi
 
 say "done"
 echo "test:  giulia-haptic slider_mid"
-echo "tune:  $EDITOR /etc/giulia-hapticd.conf   (effect 0 disables an event)"
+echo "tune:  edit /etc/giulia-hapticd.conf   (effect 0 disables an event)"
