@@ -1,0 +1,25 @@
+#!/bin/sh
+# giulia-haptic - trigger a giulia-hapticd event by name.
+#
+# Usage: giulia-haptic <event>
+#   events: power volume_up volume_down slider_up slider_mid slider_down
+#           notification
+#
+# Drop-in for KDE shortcuts / KWin scripts: map any action to
+# `giulia-haptic <event>`.
+set -eu
+
+event="${1:?usage: giulia-haptic <event>}"
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+fifo="$dir/giulia-hapticd.fifo"
+
+if [ ! -p "$fifo" ]; then
+	echo "giulia-hapticd is not running ($fifo missing)" >&2
+	exit 1
+fi
+
+# timeout guards against a stale FIFO whose daemon has died (write would block)
+printf '%s\n' "$event" | timeout 1 sh -c 'cat > "$1"' sh "$fifo" || {
+	echo "failed to write $fifo" >&2
+	exit 1
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Giulia user-space haptics daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/giulia-hapticd -c /etc/giulia-hapticd.conf
+StandardError=journal
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
