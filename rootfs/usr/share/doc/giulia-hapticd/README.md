@@ -12,8 +12,7 @@ waveform through the standard input FF interface.
 | event           | source                                       | default effect |
 |-----------------|----------------------------------------------|----------------|
 | `power`         | `pmic_pwrkey`    `KEY_POWER` (116)           | 2   |
-| `volume_up`     | `pmic_resin`     `KEY_VOLUMEUP` (115)        | 111 |
-| `volume_down`   | `gpio-keys`      `KEY_VOLUMEDOWN` (114)      | 111 |
+| `volume_change` | default sink volume step (PipeWire)          | 111 |
 | `slider_up`     | `ak09970-slider` `ABS_X` = 0                 | 0 (off) |
 | `slider_mid`    | `ak09970-slider` `ABS_X` = 1                 | 365 |
 | `slider_down`   | `ak09970-slider` `ABS_X` = 2                 | 308 |
@@ -26,6 +25,16 @@ waveform through the standard input FF interface.
 
 `0` disables an event.  The effect ids come from the Android usage map
 in `~/README.md` (SystemUI / key feedback / alert slider / desktop).
+
+### Why volume is watched, not the key
+
+Holding a volume key changes the sink volume in steps, but those steps
+are synthesised inside libinput/KWin and never reach evdev, so the key
+device only shows a single press.  `giulia-hapticd` therefore follows
+the **default sink volume** (`pactl subscribe` + `wpctl get-volume`) and
+emits `volume_change` whenever the value actually changes -- one tick
+per step, including while holding the key.  (An alert-slider move also
+changes the volume via `ak09970-slider-wrapper`, so it will tick too.)
 
 ## Configuration
 

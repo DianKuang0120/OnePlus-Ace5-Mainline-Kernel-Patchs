@@ -18,7 +18,7 @@
  * can trigger a named event.
  *
  * Event names used in the config:
- *   power, volume_up, volume_down, slider_up, slider_mid, slider_down,
+ *   power, volume_change, slider_up, slider_mid, slider_down,
  *   notification, ui_desktop, ui_showdesktop, ui_maximize, ui_snap,
  *   ui_minimize
  * Any event whose effect id is 0 is ignored.
@@ -107,6 +107,11 @@ static const char *dev_slider = "ak09970-slider";
 
 static struct dev *devs;
 static int fifo_fd = -1;
+static int vol_fd = -1;
+static long vol_last_try;
+static int vol_last_pct = -1;
+static char vol_buf[256];
+static size_t vol_len;
 
 static long now_ms(void)
 {
@@ -309,10 +314,6 @@ static void handle_event(const char *devname, int is_slider,
 {
 	if (ev->type == EV_KEY && ev->code == KEY_POWER && ev->value == 1)
 		play("power");
-	else if (ev->type == EV_KEY && ev->code == KEY_VOLUMEUP && ev->value == 1)
-		play("volume_up");
-	else if (ev->type == EV_KEY && ev->code == KEY_VOLUMEDOWN && ev->value == 1)
-		play("volume_down");
 	else if (is_slider && ev->type == EV_ABS && ev->code == ABS_X) {
 		if (ev->value == 0)
 			play("slider_up");
@@ -372,6 +373,83 @@ static void handle_watch(struct dbus_watch *w)
 		close(w->fd);
 		w->fd = -1;
 		w->len = 0;
+	}
+}
+
+/* ---- volume watch (PipeWire / PulseAudio sink) ----------------------- */
+
+static int sink_volume_percent(void)
+{
+	FILE *f;
+	char buf[128];
+	double v;
+	int pct = -1;
+
+	f = popen("wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null", "r");
+	if (!f)
+		return -1;
+	if (fgets(buf, sizeof(buf), f) && sscanf(buf, "Volume:%lf", &v) == 1)
+		pct = (int)(v * 100 + 0.5);
+	pclose(f);
+	return pct;
+}
+
+static void start_vol_watch(void)
+{
+	int p[2];
+	pid_t pid;
+
+	vol_len = 0;
+	vol_last_pct = sink_volume_percent();
+	if (pipe(p) < 0)
+		return;
+	pid = fork();
+	if (pid < 0) {
+		close(p[0]);
+		close(p[1]);
+		return;
+	}
+	if (pid == 0) {
+		dup2(p[1], STDOUT_FILENO);
+		close(p[0]);
+		close(p[1]);
+		prctl(PR_SET_PDEATHSIG, SIGKILL);
+		execlp("pactl", "pactl", "subscribe", (char *)NULL);
+		_exit(127);
+	}
+	close(p[1]);
+	vol_fd = p[0];
+	fcntl(vol_fd, F_SETFL, O_NONBLOCK);
+}
+
+static void handle_vol_watch(void)
+{
+	ssize_t r = read(vol_fd, vol_buf + vol_len,
+			 sizeof(vol_buf) - vol_len - 1);
+
+	if (r > 0) {
+		char *nl;
+
+		vol_len += r;
+		vol_buf[vol_len] = 0;
+		while ((nl = strchr(vol_buf, '\n'))) {
+			int pct;
+
+			*nl = 0;
+			if (strstr(vol_buf, "on sink")) {
+				pct = sink_volume_percent();
+				if (pct >= 0 && pct != vol_last_pct) {
+					vol_last_pct = pct;
+					play("volume_change");
+				}
+			}
+			memmove(vol_buf, nl + 1, strlen(nl + 1) + 1);
+		}
+		vol_len = strlen(vol_buf);
+	} else if (r == 0 || (r < 0 && errno != EAGAIN &&
+			      errno != EWOULDBLOCK)) {
+		close(vol_fd);
+		vol_fd = -1;
 	}
 }
 
@@ -436,7 +514,7 @@ int main(int argc, char **argv)
 	const char *cfg = "/etc/giulia-hapticd.conf";
 	char fifo[128];
 	const char *rundir;
-	struct pollfd fds[MAX_DEVS + MAX_WATCHES + 2];
+	struct pollfd fds[MAX_DEVS + MAX_WATCHES + 3];
 	int i;
 
 	signal(SIGCHLD, SIG_IGN);
@@ -468,6 +546,10 @@ int main(int argc, char **argv)
 				start_watch(&watches[i]);
 			}
 		}
+		if (vol_fd < 0 && now - vol_last_try > 5000) {
+			vol_last_try = now;
+			start_vol_watch();
+		}
 
 		for (d = devs; d; d = d->next) {
 			fds[n].fd = d->fd;
@@ -491,6 +573,11 @@ int main(int argc, char **argv)
 
 			fds[n].fd = sd_bus_get_fd(bus);
 			fds[n].events = ev > 0 ? ev : POLLIN;
+			n++;
+		}
+		if (vol_fd >= 0) {
+			fds[n].fd = vol_fd;
+			fds[n].events = POLLIN;
 			n++;
 		}
 
@@ -523,10 +610,14 @@ int main(int argc, char **argv)
 				continue;
 			}
 
+			if (fds[i].fd == vol_fd) {
+				handle_vol_watch();
+				continue;
+			}
+
 			if (fds[i].fd == fifo_fd) {
 				char buf[256];
 				ssize_t r = read(fifo_fd, buf, sizeof(buf) - 1);
-
 				if (r > 0) {
 					char *tok, *save = NULL;
 
