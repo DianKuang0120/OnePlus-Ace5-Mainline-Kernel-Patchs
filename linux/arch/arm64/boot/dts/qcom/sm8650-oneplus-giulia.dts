@@ -1235,6 +1235,21 @@
 		qcom,hap-swr-slave-reg {
 			regulator-name = "hap-swr-slave-reg";
 		};
+
+		/*
+		 * Preloaded pattern effect; enables FF_PERIODIC/FF_CUSTOM and
+		 * the pattern playback path.  Tuple = <amplitude(<=0x1ff)
+		 * period(0..6) f_lra_x2(0|1)>.
+		 */
+		effect-click {
+			qcom,effect-id = <0>;
+			qcom,wf-vmax-mv = <1800>;
+			qcom,wf-pattern-preload;
+			qcom,wf-pattern-data = <0x1ff 0x00 0x00>,
+					       <0x1ff 0x00 0x01>,
+					       <0x1ff 0x01 0x00>,
+					       <0x180 0x02 0x00>;
+		};
 	};
 };
 

@@ -3120,6 +3120,26 @@ static int haptics_upload_effect(struct input_dev *dev,
 		}
 
 		break;
+	case FF_RUMBLE:
+		/*
+		 * mainline addition: map the standard FF_RUMBLE effect onto the
+		 * DIRECT_PLAY path so ordinary Linux haptics tooling works.
+		 */
+		length_ms = effect->replay.length;
+		{
+			u16 mag = max(effect->u.rumble.strong_magnitude,
+				      effect->u.rumble.weak_magnitude);
+
+			tmp = get_direct_play_max_amplitude(chip);
+			amplitude = (u32)tmp * mag / 0xffff;
+		}
+		dev_dbg(chip->dev,
+			"upload rumble effect, length = %dms, amplitude = %#x\n",
+			length_ms, amplitude);
+		schedule_delayed_work(&chip->stop_work,
+				      msecs_to_jiffies(length_ms));
+		haptics_load_constant_effect(chip, amplitude);
+		break;
 	case FF_PERIODIC:
 		if (effect->u.periodic.waveform != FF_CUSTOM) {
 			dev_err(chip->dev, "Only support custom waveforms\n");
@@ -6772,6 +6792,7 @@ static int haptics_probe(struct platform_device *pdev)
 
 	input_set_capability(input_dev, EV_FF, FF_CONSTANT);
 	input_set_capability(input_dev, EV_FF, FF_GAIN);
+	input_set_capability(input_dev, EV_FF, FF_RUMBLE);
 	if ((chip->effects_count != 0) || (chip->primitives_count != 0)) {
 		input_set_capability(input_dev, EV_FF, FF_PERIODIC);
 		input_set_capability(input_dev, EV_FF, FF_CUSTOM);
