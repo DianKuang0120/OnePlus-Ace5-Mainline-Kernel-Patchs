@@ -1220,10 +1220,21 @@
 		interrupt-names = "fifo-empty";
 
 		qcom,vmax-mv = <1260>;
-		qcom,lra-period-us = <5882>;
+		qcom,cl-vmax-mv = <1260>;
+		qcom,fifo-vmax-mv = <7700>;
+		qcom,old-steady-vmax-mv = <7700>;
 		qcom,brake-mode = <0>;
 		qcom,brake-pattern = /bits/ 8 <0xff 0x3f 0x1f>;
+		qcom,lra-period-us = <5882>;
 		qcom,drv-sig-shape = <1>;
+		qcom,brake-sig-shape = <1>;
+		qcom,fifo-empty-threshold = <480>;
+		qcom,vibrator-type = <809>;
+		qcom,cal-data-restore;
+
+		qcom,hap-swr-slave-reg {
+			regulator-name = "hap-swr-slave-reg";
+		};
 	};
 };
 

@@ -10,9 +10,9 @@ diff --git a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
 +	depends on MFD_SPMI_PMIC
 +	select INPUT_FF_MEMLESS
 +	help
-+	  Minimal driver for the Qualcomm High-Voltage Haptics block found
-+	  in PM8550B (HAP525_HV).  Enables the module and exposes an
-+	  FF_RUMBLE input device to drive the LRA.
++	  Driver for the Qualcomm High-Voltage Haptics block found in PM8550B
++	  (HAP525_HV).  It drives the LRA and exposes an input FF device with
++	  DIRECT_PLAY, pattern and FIFO playback plus LRA calibration.
 +
 +	  To compile this driver as a module, choose M here: the module will
 +	  be called qcom-hv-haptics.
