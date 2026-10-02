@@ -646,10 +646,11 @@ struct haptics_play_info {
 struct haptics_hw_config {
 	struct brake_cfg	brake;
 	u32			vmax_mv;
+	/* mainline: VMAX used for streamed FIFO/waveform playback */
+	u32			fifo_vmax_mv;
 #ifdef OPLUS_FEATURE_CHG_BASIC
 	u32			cl_vmax_mv;
 	u32			cali_time;
-	u32			fifo_vmax_mv;
 	u32			old_steady_vmax_mv;
 	u32			vibrator_type;
 	u32			vbat_low_soc;
@@ -2737,11 +2738,12 @@ static int haptics_init_custom_effect(struct haptics_chip *chip)
 	chip->custom_effect->pattern = NULL;
 	chip->custom_effect->brake = NULL;
 	chip->custom_effect->id = UINT_MAX;
-#ifdef OPLUS_FEATURE_CHG_BASIC
+	/*
+	 * mainline: upstream FIFO/waveform playback always uses the dedicated
+	 * FIFO VMAX (qcom,fifo-vmax-mv); the OPLUS charge build used the lower
+	 * direct-play VMAX here, which makes streamed waveforms far too weak.
+	 */
 	chip->custom_effect->vmax_mv = chip->config.fifo_vmax_mv;
-#else
-	chip->custom_effect->vmax_mv = chip->config.vmax_mv;
-#endif
 	chip->custom_effect->t_lra_us = chip->config.t_lra_us;
 	chip->custom_effect->src = FIFO;
 	chip->custom_effect->auto_res_disable = true;
@@ -4518,6 +4520,12 @@ static int haptics_parse_dt(struct haptics_chip *chip)
 		rc = -EINVAL;
 		goto free_pbs;
 	}
+
+	/* mainline: VMAX for streamed FIFO/waveform playback */
+	config->fifo_vmax_mv = config->vmax_mv;
+	of_property_read_u32(node, "qcom,fifo-vmax-mv", &config->fifo_vmax_mv);
+	if (config->fifo_vmax_mv >= MAX_VMAX_MV)
+		config->fifo_vmax_mv = MAX_VMAX_MV - 1;
 
 #ifdef OPLUS_FEATURE_CHG_BASIC
 	chip->cal_data_restore = of_property_read_bool(node, "qcom,cal-data-restore");
