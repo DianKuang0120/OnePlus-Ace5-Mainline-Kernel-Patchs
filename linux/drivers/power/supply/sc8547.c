@@ -310,6 +310,7 @@ static int sc8547_set_chg_enable(struct sc8547 *chip, bool enable)
 	}
 
 	/* 修复: write 成功就算成功，不再把 readback 的结果当返回值 */
+	chip->cp_on = enable;
 	return 0;
 }
 
@@ -383,6 +384,27 @@ static int sc8547_config_bypass_mode(struct sc8547 *chip)
 }
 
 /*
+ * Optional sibling pump.  A node points at its partner with
+ * "southchip,sibling"; the master mirrors enable/disable onto it so both
+ * halves of a 2-phase stack switch together.
+ */
+static struct sc8547 *sc8547_sibling(struct sc8547 *chip)
+{
+	struct device_node *np;
+	struct i2c_client *cl;
+	struct sc8547 *sib = NULL;
+
+	np = of_parse_phandle(chip->dev->of_node, "southchip,sibling", 0);
+	if (!np)
+		return NULL;
+	cl = of_find_i2c_device_by_node(np);
+	of_node_put(np);
+	if (cl)
+		sib = i2c_get_clientdata(cl);
+	return sib;
+}
+
+/*
  * Event-driven CP enable/disable.
  *
  * The USB power_supply notifier schedules this as soon as the PMIC-GLINK
@@ -429,6 +451,24 @@ static void sc8547_state_work(struct work_struct *work)
 	} else if (!want && cp_en) {
 		dev_info(chip->dev, "source gone -> disabling CP\n");
 		sc8547_set_chg_enable(chip, false);
+	}
+
+	/*
+	 * Keep both halves of a 2-phase stack in lockstep: the master also
+	 * drives the pump referenced by "southchip,sibling".  Best effort --
+	 * the sibling may not have probed yet.
+	 */
+	if (chip->is_master) {
+		struct sc8547 *sib = sc8547_sibling(chip);
+
+		if (sib) {
+			if (want && !sib->cp_on) {
+				if (sc8547_config_sc_mode(sib) == 0)
+					sc8547_set_chg_enable(sib, true);
+			} else if (!want && sib->cp_on) {
+				sc8547_set_chg_enable(sib, false);
+			}
+		}
 	}
 }
 
