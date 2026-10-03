@@ -3,7 +3,6 @@
 /dts-v1/;
 
 #include <dt-bindings/leds/common.h>
-#include <dt-bindings/clock/qcom,sm8650-camcc.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
@@ -397,7 +396,6 @@
 
 		vreg_l11b_1p2: ldo11 {
 			regulator-name = "vreg_l11b_1p2";
-			regulator-always-on;
 			regulator-min-microvolt = <1200000>;
 			regulator-max-microvolt = <1504000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -525,7 +523,6 @@
 
 		vreg_l1c_1p2: ldo1 {
 			regulator-name = "vreg_l1c_1p2";
-			regulator-always-on;
 			regulator-min-microvolt = <1200000>;
 			regulator-max-microvolt = <1200000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -666,7 +663,6 @@
 
 		vreg_l1m_1p1: ldo1 {
 			regulator-name = "vreg_l1m_1p1";
-			regulator-always-on;
 			regulator-min-microvolt = <1104000>;
 			regulator-max-microvolt = <1104000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -677,7 +673,6 @@
 
 		vreg_l2m_1p056: ldo2 {
 			regulator-name = "vreg_l2m_1p056";
-			regulator-always-on;
 			regulator-min-microvolt = <1056000>;
 			regulator-max-microvolt = <1056000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -695,7 +690,6 @@
 
 		vreg_l4m_2p8: ldo4 {
 			regulator-name = "vreg_l4m_2p8";
-			regulator-always-on;
 			regulator-min-microvolt = <2800000>;
 			regulator-max-microvolt = <2800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -703,7 +697,6 @@
 
 		vreg_l5m_1p8: ldo5 {
 			regulator-name = "vreg_l5m_1p8";
-			regulator-always-on;
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -728,71 +721,22 @@
 };
 
 /*
- * Cameras on giulia: 50MP main (Sony IMX906, marketed as LYT-700),
- * 8MP ultrawide (Sony IMX355) and a 2MP macro, powered by pm8010m/n.
- *
- * Bringup target: the ultrawide IMX355, which has a mainline driver.
- * From the downstream camera overlay: CSI PHY0, CCI master 0, MCLK2,
- * reset GPIO 14, vana 2.8V / vdig 1.2V / vio 1.8V.
+ * Cameras differ from QRD: giulia has 50MP main LYT-700 + 8MP UW + 2MP macro,
+ * powered by pm8010m/n rails. Leave CAMSS/CCI enabled for bringup, add
+ * sensors later from downstream cam_sensor nodes.
  */
 &camss {
-	vdd-csiphy01-0p9-supply = <&vreg_l2i_0p88>;
-	vdd-csiphy01-1p2-supply = <&vreg_l3i_1p2>;
 	vdd-csiphy35-0p9-supply = <&vreg_l2i_0p88>;
 	vdd-csiphy35-1p2-supply = <&vreg_l3i_1p2>;
 
 	status = "okay";
-
-	ports {
-		port@0 {
-			csiphy0_ep: endpoint {
-				data-lanes = <0 1 2 3>;
-				remote-endpoint = <&imx355_ep>;
-			};
-		};
-	};
-};
-
-&cci0 {
-	status = "okay";
-};
-
-/* 8MP ultrawide: Sony IMX355 */
-&cci0_i2c0 {
-	imx355: camera@1a {
-		compatible = "sony,imx355";
-		reg = <0x1a>;
-
-		clocks = <&camcc CAM_CC_MCLK2_CLK>;
-		assigned-clocks = <&camcc CAM_CC_MCLK2_CLK>;
-		assigned-clock-rates = <19200000>;
-
-		reset-gpios = <&tlmm 14 GPIO_ACTIVE_HIGH>;
-		pinctrl-0 = <&cam2_default>;
-		pinctrl-1 = <&cam2_sleep>;
-		pinctrl-names = "default", "sleep";
-
-		avdd-supply = <&vreg_l4m_2p8>;
-		dvdd-supply = <&vreg_l11b_1p2>;
-		dovdd-supply = <&vreg_l5m_1p8>;
-
-		port {
-			imx355_ep: endpoint {
-				remote-endpoint = <&csiphy0_ep>;
-				data-lanes = <0 1 2 3>;
-				link-frequencies = /bits/ 64 <360000000>;
-			};
-		};
-	};
 };
 
 &cci1 {
-	/* nothing wired on giulia; leaving it on floods the log with
-	 * "ac16000.cci: master 1 queue 1 timeout" */
-	status = "disabled";
+	status = "okay";
 };
 
-/* TODO: 50MP main (imx906) and 2MP macro sensors */
+/* TODO: add giulia camera sensors from downstream (not QRD's s5kjn1) */
 &cci1_i2c0 {
 };
 
