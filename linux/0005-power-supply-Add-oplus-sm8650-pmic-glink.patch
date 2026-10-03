@@ -1,5 +1,3 @@
-diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
-index 7716eb9..6af48bf 100644
 --- a/drivers/power/supply/qcom_battmgr.c
 +++ b/drivers/power/supply/qcom_battmgr.c
 @@ -6,6 +6,9 @@
@@ -12,7 +10,7 @@ index 7716eb9..6af48bf 100644
  #include <linux/module.h>
  #include <linux/mutex.h>
  #include <linux/nvmem-consumer.h>
-@@ -14,6 +17,8 @@
+@@ -14,6 +17,7 @@
  #include <linux/property.h>
  #include <linux/soc/qcom/pdr.h>
  #include <linux/soc/qcom/pmic_glink.h>
@@ -20,7 +18,7 @@ index 7716eb9..6af48bf 100644
  #include <linux/math.h>
  #include <linux/units.h>
  
-@@ -24,6 +29,7 @@ enum qcom_battmgr_variant {
+@@ -24,6 +28,7 @@
  	QCOM_BATTMGR_SC8280XP,
  	QCOM_BATTMGR_SM8350,
  	QCOM_BATTMGR_SM8550,
@@ -28,10 +26,11 @@ index 7716eb9..6af48bf 100644
  	QCOM_BATTMGR_X1E80100,
  };
  
-@@ -39,6 +45,16 @@ enum qcom_battmgr_variant {
+@@ -38,6 +43,16 @@
+ #define NOTIF_BAT_STATUS		0x80
  #define NOTIF_BAT_INFO			0x81
  #define NOTIF_BAT_CHARGING_STATE	0x83
- 
++
 +/*
 + * Oplus firmware notification codes (extracted from downstream
 + * oplus_hal_adsp.h). Only OTG enable/disable need dedicated handling;
@@ -41,11 +40,10 @@ index 7716eb9..6af48bf 100644
 +#define NOTIF_OPLUS_OTG_ENABLE		0x50
 +#define NOTIF_OPLUS_OTG_DISABLE		0x51
 +#define NOTIF_OPLUS_LAST		0x7f
-+
+ 
  #define BATTMGR_BAT_INFO		0x9
  
- #define BATTMGR_BAT_DISCHARGE_TIME	0xc
-@@ -74,7 +90,6 @@ enum qcom_battmgr_variant {
+@@ -74,7 +89,6 @@
  #define BATT_CHG_CTRL_EN		24
  #define BATT_CHG_CTRL_START_THR		25
  #define BATT_CHG_CTRL_END_THR		26
@@ -53,7 +51,7 @@ index 7716eb9..6af48bf 100644
  #define BATTMGR_USB_PROPERTY_GET	0x32
  #define BATTMGR_USB_PROPERTY_SET	0x33
  #define USB_ONLINE			0
-@@ -87,6 +102,46 @@ enum qcom_battmgr_variant {
+@@ -87,6 +101,46 @@
  #define USB_ADAP_TYPE			7
  #define USB_MOISTURE_DET_EN		8
  #define USB_MOISTURE_DET_STS		9
@@ -100,7 +98,7 @@ index 7716eb9..6af48bf 100644
  
  #define BATTMGR_WLS_PROPERTY_GET	0x34
  #define BATTMGR_WLS_PROPERTY_SET	0x35
-@@ -334,6 +389,19 @@ struct qcom_battmgr {
+@@ -334,6 +388,19 @@
  
  	struct work_struct enable_work;
  
@@ -120,7 +118,7 @@ index 7716eb9..6af48bf 100644
  	/*
  	 * @lock is used to prevent concurrent power supply requests to the
  	 * firmware, as it then stops responding.
-@@ -989,6 +1057,11 @@ static int qcom_battmgr_usb_sm8350_update(struct qcom_battmgr *battmgr,
+@@ -989,12 +1056,20 @@
  
  	prop = sm8350_usb_prop_map[psp];
  
@@ -132,14 +130,19 @@ index 7716eb9..6af48bf 100644
  	mutex_lock(&battmgr->lock);
  	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
  	mutex_unlock(&battmgr->lock);
-@@ -1085,7 +1085,21 @@+static void qcom_battmgr_pps_keepalive_start(struct qcom_battmgr *battmgr);
-+static void qcom_battmgr_pps_keepalive_stop(struct qcom_battmgr *battmgr);
+ 
+ 	return ret;
+ }
 +
++static void qcom_battmgr_pps_keepalive_start(struct qcom_battmgr *battmgr);
++static void qcom_battmgr_pps_keepalive_stop(struct qcom_battmgr *battmgr);
+ 
  static int qcom_battmgr_usb_get_property(struct power_supply *psy,
+ 					 enum power_supply_property psp,
+@@ -1013,6 +1088,19 @@
  		ret = qcom_battmgr_usb_sm8350_update(battmgr, psp);
  	if (ret)
  		return ret;
- 
 +	/*
 +	 * Auto-manage PPS keepalive based on USB state.
 +	 * USB online + PD_PPS -> start, otherwise stop.
@@ -153,11 +156,10 @@ index 7716eb9..6af48bf 100644
 +		else if (!want_pps && battmgr->pps_keepalive_running)
 +			qcom_battmgr_pps_keepalive_stop(battmgr);
 +	}
-+
+ 
  	switch (psp) {
  	case POWER_SUPPLY_PROP_ONLINE:
- 		val->intval = battmgr->usb.online;
-@@ -1209,15 +1282,37 @@ static void qcom_battmgr_notification(struct qcom_battmgr *battmgr,
+@@ -1209,15 +1297,37 @@
  	case NOTIF_BAT_STATUS:
  	case NOTIF_BAT_PROPERTY:
  	case NOTIF_BAT_CHARGING_STATE:
@@ -197,7 +199,7 @@ index 7716eb9..6af48bf 100644
  		dev_err(battmgr->dev, "unknown notification: %#x\n", notification);
  		break;
  	}
-@@ -1516,6 +1611,15 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+@@ -1516,6 +1626,15 @@
  		case USB_TYPE:
  			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
  			break;
@@ -213,7 +215,7 @@ index 7716eb9..6af48bf 100644
  		default:
  			dev_warn(battmgr->dev, "unknown property %#x\n", property);
  			break;
-@@ -1556,6 +1660,11 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+@@ -1556,6 +1675,11 @@
  			break;
  		}
  		break;
@@ -225,7 +227,7 @@ index 7716eb9..6af48bf 100644
  	case BATTMGR_REQUEST_NOTIFICATION:
  	case BATTMGR_CHG_CTRL_LIMIT_EN:
  		battmgr->error = 0;
-@@ -1577,6 +1686,9 @@ static void qcom_battmgr_callback(const void *data, size_t len, void *priv)
+@@ -1577,6 +1701,9 @@
  
  	if (opcode == BATTMGR_NOTIFICATION)
  		qcom_battmgr_notification(battmgr, data, len);
@@ -235,7 +237,7 @@ index 7716eb9..6af48bf 100644
  	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
  		 battmgr->variant == QCOM_BATTMGR_X1E80100)
  		qcom_battmgr_sc8280xp_callback(battmgr, data, len);
-@@ -1599,6 +1711,283 @@ static void qcom_battmgr_enable_worker(struct work_struct *work)
+@@ -1599,6 +1726,283 @@
  		dev_err(battmgr->dev, "failed to request power notifications\n");
  }
  
@@ -519,7 +521,7 @@ index 7716eb9..6af48bf 100644
  static void qcom_battmgr_pdr_notify(void *priv, int state)
  {
  	struct qcom_battmgr *battmgr = priv;
-@@ -1606,12 +1996,22 @@ static void qcom_battmgr_pdr_notify(void *priv, int state)
+@@ -1606,12 +2010,22 @@
  	if (state == SERVREG_SERVICE_STATE_UP) {
  		battmgr->service_up = true;
  		schedule_work(&battmgr->enable_work);
@@ -542,7 +544,7 @@ index 7716eb9..6af48bf 100644
  	{ .compatible = "qcom,glymur-pmic-glink", .data = (void *)QCOM_BATTMGR_X1E80100 },
  	{ .compatible = "qcom,kaanapali-pmic-glink", .data = (void *)QCOM_BATTMGR_SM8550 },
  	{ .compatible = "qcom,sc8180x-pmic-glink", .data = (void *)QCOM_BATTMGR_SC8280XP },
-@@ -1624,6 +2024,14 @@ static const struct of_device_id qcom_battmgr_of_variants[] = {
+@@ -1624,6 +2038,14 @@
  
  static char *qcom_battmgr_battery[] = { "battery" };
  
@@ -557,7 +559,7 @@ index 7716eb9..6af48bf 100644
  static int qcom_battmgr_probe(struct auxiliary_device *adev,
  			      const struct auxiliary_device_id *id)
  {
-@@ -1652,12 +2060,31 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+@@ -1652,11 +2074,30 @@
  	mutex_init(&battmgr->lock);
  	init_completion(&battmgr->ack);
  
@@ -578,18 +580,17 @@ index 7716eb9..6af48bf 100644
  		battmgr->variant = (unsigned long)match->data;
  	else
  		battmgr->variant = QCOM_BATTMGR_SM8350;
- 
++
 +	if (battmgr->variant == QCOM_BATTMGR_OPLUS_SM8650) {
 +		ret = devm_device_add_group(dev, &qcom_battmgr_oplus_group);
 +		if (ret)
 +			return dev_err_probe(dev, ret,
 +					     "failed to add oplus sysfs group\n");
 +	}
-+
+ 
  	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
  	if (ret < 0)
- 		return dev_err_probe(dev, ret,
-@@ -1690,25 +2117,34 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+@@ -1690,25 +2131,34 @@
  			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
  					     "failed to register wireless charing power supply\n");
  	} else {

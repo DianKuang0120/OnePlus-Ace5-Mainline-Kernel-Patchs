@@ -4,13 +4,12 @@
  *
  * Copyright (C) 2020-2024 Opus. All rights reserved.
  *
- * Design:
- *   - Enable/disable is event driven: a power_supply notifier watches the
- *     PMIC-GLINK USB supply and kicks a state machine as soon as the PD/PPS
- *     source changes (no polling), so fast charging starts immediately.
- *   - The 1 s watchdog is left ENABLED (REG_09 = 0x13 / 0x93) and fed from a
- *     delayed work every 500 ms; a watchdog reset drops the CP to OFF.
- *   - The CP is only ever enabled with a valid high-voltage source present.
+ * 修复要点:
+ *   1. 配置 SC/Bypass 模式时禁用 1s 看门狗 (REG_09 bit[2:0] = 0)，
+ *      避免无周期喂狗时看门狗自动清零 CHG_EN，导致 CP 不导通（ibus=0）。
+ *   2. 保留一个可选的周期喂狗 work，如果将来要重开看门狗，直接使能即可。
+ *   3. 使能 CP 前先强制 VAC_OK (REG_0C = 0x02) 并延时 50ms。
+ *   4. 打开 CP 后回读 REG_07 / REG_06 并打印，便于快速定位。
  */
 
 #include <linux/delay.h>
@@ -41,11 +40,12 @@
 #endif
 
 /*
- * 1 s watchdog, fed from work context while the CP is enabled.
- * REG_09 bit[2:0] = 0b011.
+ * 若将来需要重新开启看门狗：
+ *   1) 在 sc8547_config_sc_mode / sc8547_init_device 里把 REG_09 改成 0x13;
+ *   2) 打开下面的 SC8547_WDT_ENABLE 宏，CHG_EN 打开后会自动周期喂狗。
  */
-#define SC8547_WDT_ENABLE		1
-#define SC8547_WDT_KICK_INTERVAL_MS	500	/* must be < 1000 */
+#define SC8547_WDT_ENABLE		0
+#define SC8547_WDT_KICK_INTERVAL_MS	500	/* 必须 < 1000ms */
 
 struct sc8547 {
 	struct device		*dev;
@@ -57,7 +57,6 @@ struct sc8547 {
 	u8			ovp_reg;
 	u8			ocp_reg;
 	u32			pps_ocp_max;
-	u32			auto_enable_mv;
 
 	int			irq;
 	struct work_struct	irq_work;
@@ -66,13 +65,7 @@ struct sc8547 {
 	bool			adc_enabled;
 
 	struct delayed_work	kick_dog_work;
-
-	/* event-driven enable/disable driven by the PMIC-GLINK USB supply */
-	struct notifier_block	usb_nb;
-	struct work_struct	state_work;
-	bool			cp_on;
-
-	struct power_supply	*psy;
+	struct delayed_work	auto_enable_work;
 };
 
 static int sc8547_get_chg_enable(struct sc8547 *chip, bool *enabled);
@@ -310,7 +303,6 @@ static int sc8547_set_chg_enable(struct sc8547 *chip, bool enable)
 	}
 
 	/* 修复: write 成功就算成功，不再把 readback 的结果当返回值 */
-	chip->cp_on = enable;
 	return 0;
 }
 
@@ -336,10 +328,13 @@ static int sc8547_config_sc_mode(struct sc8547 *chip)
 	SC8547_WR(SC8547_REG_05, reg_data);
 
 	/*
-	 * WATCHDOG_1S + IBUS_UCP_RISE_MASK.  Fed by kick_dog_work while the
-	 * CP is enabled; a missed feed turns CHG_EN off (fail safe).
+	 * ★ 关键修复:
+	 *   0x13 -> 0x10
+	 *   0x13 = WATCHDOG_1S，1 秒内不喂狗会自动关 CHG_EN;
+	 *   0x10 = WATCHDOG_DIS + IBUS_UCP_RISE_MASK，看门狗彻底关闭。
+	 *   vendor 在 PDQC/5V2A 路径下就是写 0x10。
 	 */
-	SC8547_WR(SC8547_REG_09, 0x13);
+	SC8547_WR(SC8547_REG_09, 0x10);
 
 	SC8547_WR(SC8547_REG_11, 0x80);	/* ADC on */
 	SC8547_WR(SC8547_REG_0D, 0x70);	/* PMID2OUT */
@@ -350,7 +345,7 @@ static int sc8547_config_sc_mode(struct sc8547 *chip)
 #undef SC8547_WR
 
 	chip->adc_enabled = true;
-	dev_info(chip->dev, "configured SC mode (WDT on), ocp_reg=0x%02x\n",
+	dev_info(chip->dev, "configured SC mode (WDT off), ocp_reg=0x%02x\n",
 		 reg_data);
 	return 0;
 }
@@ -370,8 +365,12 @@ static int sc8547_config_bypass_mode(struct sc8547 *chip)
 	SC8547_WR(SC8547_REG_04, 0x0A);	/* VBUS_OVP 6.5V */
 	SC8547_WR(SC8547_REG_05, 0x2a);	/* IBUS OCP */
 
-	/* WATCHDOG_1S | IBUS_UCP_RISE_MASK | CHARGE_MODE_1_1 */
-	SC8547_WR(SC8547_REG_09, 0x93);
+	/*
+	 * ★ 同样禁用看门狗。
+	 *   0x93 = WATCHDOG_1S | IBUS_UCP_RISE_MASK | CHARGE_MODE_1_1
+	 *   0x90 = WATCHDOG_DIS | IBUS_UCP_RISE_MASK | CHARGE_MODE_1_1
+	 */
+	SC8547_WR(SC8547_REG_09, 0x90);
 	SC8547_WR(SC8547_REG_11, 0x80);	/* ADC on */
 	SC8547_WR(SC8547_REG_2B, 0x00);
 	SC8547_WR(SC8547_REG_3C, 0x40);
@@ -379,109 +378,68 @@ static int sc8547_config_bypass_mode(struct sc8547 *chip)
 #undef SC8547_WR
 
 	chip->adc_enabled = true;
-	dev_info(chip->dev, "configured bypass mode (WDT on)\n");
+	dev_info(chip->dev, "configured bypass mode (WDT off)\n");
 	return 0;
 }
 
 /*
- * Optional sibling pump.  A node points at its partner with
- * "southchip,sibling"; the master mirrors enable/disable onto it so both
- * halves of a 2-phase stack switch together.
+ * Read USB VBUS from the PMIC GLINK power supply.
+ * Returns 0 if the psy isn't registered yet.
  */
-static struct sc8547 *sc8547_sibling(struct sc8547 *chip)
+static int sc8547_get_usb_volt_uv(struct sc8547 *chip)
 {
-	struct device_node *np;
-	struct i2c_client *cl;
-	struct sc8547 *sib = NULL;
+	struct power_supply *psy;
+	union power_supply_propval val;
+	int ret;
 
-	np = of_parse_phandle(chip->dev->of_node, "southchip,sibling", 0);
-	if (!np)
-		return NULL;
-	cl = of_find_i2c_device_by_node(np);
-	of_node_put(np);
-	if (cl)
-		sib = i2c_get_clientdata(cl);
-	return sib;
+	psy = power_supply_get_by_name("qcom-battmgr-usb");
+	if (!psy)
+		return 0;
+
+	ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val);
+	power_supply_put(psy);
+
+	if (ret)
+		return 0;
+
+	return val.intval;
 }
 
 /*
- * Event-driven CP enable/disable.
+ * Automatic CP enable/disable based on USB VBUS.
  *
- * The USB power_supply notifier schedules this as soon as the PMIC-GLINK
- * USB supply reports a change, so a PPS/PD source is followed within
- * milliseconds instead of on a 1 Hz tick.
+ *   VBUS > 8V  (PPS active)  → switch to SC mode + enable
+ *   VBUS < 6V  (PPS gone)    → disable
+ *
+ * This lets the CP follow the ADSP's PPS state without
+ * requiring any userspace interaction.
  */
-static void sc8547_state_work(struct work_struct *work)
+static void sc8547_auto_enable_worker(struct work_struct *work)
 {
-	struct sc8547 *chip = container_of(work, struct sc8547, state_work);
-	union power_supply_propval val = { 0 };
-	struct power_supply *psy;
-	bool online = false, cp_en, want;
-	int usb_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
-	int vbus_uv = 0;
+	struct sc8547 *chip = container_of(to_delayed_work(work),
+					   struct sc8547, auto_enable_work);
+	bool cp_enabled = false;
+	int vbus_uv;
 
-	psy = power_supply_get_by_name("qcom-battmgr-usb");
-	if (psy) {
-		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_ONLINE, &val))
-			online = val.intval;
-		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_USB_TYPE, &val))
-			usb_type = val.intval;
-		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val))
-			vbus_uv = val.intval;
-		power_supply_put(psy);
-	}
+	if (sc8547_get_chg_enable(chip, &cp_enabled) < 0)
+		goto reschedule;
 
-	/*
-	 * SC (charge-pump) mode needs a ~2*Vbat PPS source; a fixed
-	 * high-voltage source (VOOC/SVOOC, HVDCP) uses bypass.  Both show up
-	 * as VBUS >= 6.5 V, so only ever enable with a valid high-V source.
-	 */
-	want = online &&
-	       (usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS ||
-		vbus_uv >= chip->auto_enable_mv * 1000);
+	vbus_uv = sc8547_get_usb_volt_uv(chip);
 
-	if (sc8547_get_chg_enable(chip, &cp_en))
-		return;
-
-	if (want && !cp_en) {
-		dev_info(chip->dev, "VBUS %dmV type %d -> enabling CP\n",
-			 vbus_uv / 1000, usb_type);
-		if (sc8547_config_sc_mode(chip) == 0)
-			sc8547_set_chg_enable(chip, true);
-	} else if (!want && cp_en) {
-		dev_info(chip->dev, "source gone -> disabling CP\n");
+	if (vbus_uv >= SC8547_AUTO_ENABLE_MV * 1000 && !cp_enabled) {
+		dev_info(chip->dev, "%s: VBUS %dmV, auto-enabling CP\n",
+			 chip->is_master ? "master" : "slave", vbus_uv / 1000);
+		sc8547_config_sc_mode(chip);
+		sc8547_set_chg_enable(chip, true);
+	} else if (vbus_uv > 0 && vbus_uv < SC8547_AUTO_DISABLE_MV * 1000 && cp_enabled) {
+		dev_info(chip->dev, "%s: VBUS %dmV, auto-disabling CP\n",
+			 chip->is_master ? "master" : "slave", vbus_uv / 1000);
 		sc8547_set_chg_enable(chip, false);
 	}
 
-	/*
-	 * Keep both halves of a 2-phase stack in lockstep: the master also
-	 * drives the pump referenced by "southchip,sibling".  Best effort --
-	 * the sibling may not have probed yet.
-	 */
-	if (chip->is_master) {
-		struct sc8547 *sib = sc8547_sibling(chip);
-
-		if (sib) {
-			if (want && !sib->cp_on) {
-				if (sc8547_config_sc_mode(sib) == 0)
-					sc8547_set_chg_enable(sib, true);
-			} else if (!want && sib->cp_on) {
-				sc8547_set_chg_enable(sib, false);
-			}
-		}
-	}
-}
-
-static int sc8547_usb_notify(struct notifier_block *nb,
-			     unsigned long action, void *data)
-{
-	struct sc8547 *chip = container_of(nb, struct sc8547, usb_nb);
-	struct power_supply *psy = data;
-
-	if (psy && psy->desc && !strcmp(psy->desc->name, "qcom-battmgr-usb"))
-		schedule_work(&chip->state_work);
-
-	return NOTIFY_OK;
+reschedule:
+	schedule_delayed_work(&chip->auto_enable_work,
+			      msecs_to_jiffies(SC8547_AUTO_CHECK_INTERVAL_MS));
 }
 
 /* ---------- ADC 读取 ---------- */
@@ -770,83 +728,6 @@ static struct attribute *sc8547_attrs[] = {
 };
 ATTRIBUTE_GROUPS(sc8547);
 
-/* ---------- power_supply ---------- */
-
-static int sc8547_psy_get_property(struct power_supply *psy,
-				   enum power_supply_property psp,
-				   union power_supply_propval *val)
-{
-	struct sc8547 *chip = power_supply_get_drvdata(psy);
-	bool en = false;
-	int tmp;
-
-	switch (psp) {
-	case POWER_SUPPLY_PROP_ONLINE:
-		if (sc8547_get_chg_enable(chip, &en))
-			en = false;
-		val->intval = en;
-		break;
-	case POWER_SUPPLY_PROP_STATUS:
-		if (sc8547_get_chg_enable(chip, &en))
-			en = false;
-		val->intval = en ? POWER_SUPPLY_STATUS_CHARGING :
-				   POWER_SUPPLY_STATUS_NOT_CHARGING;
-		break;
-	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		if (sc8547_get_cp_vout(chip, &tmp))
-			return -EAGAIN;
-		val->intval = tmp * 1000;	/* mV -> uV */
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		if (sc8547_get_cp_ichg(chip, &tmp))
-			return -EAGAIN;
-		val->intval = tmp * 1000;	/* mA -> uA */
-		break;
-	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
-		val->intval = chip->pps_ocp_max * 1000;	/* mA -> uA */
-		break;
-	default:
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static int sc8547_psy_set_property(struct power_supply *psy,
-				   enum power_supply_property psp,
-				   const union power_supply_propval *val)
-{
-	struct sc8547 *chip = power_supply_get_drvdata(psy);
-	u8 ocp;
-
-	switch (psp) {
-	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
-		/* uA -> mA, clamped to the IBUS OCP field range */
-		ocp = clamp_val(val->intval / 1000, 0, SC8547_IBUS_OCP_MASK);
-		chip->ocp_reg = ocp;
-		return sc8547_write_byte(chip, SC8547_REG_05,
-					 0x20 | (ocp & SC8547_IBUS_OCP_MASK));
-	default:
-		return -EINVAL;
-	}
-}
-
-static const enum power_supply_property sc8547_psy_props[] = {
-	POWER_SUPPLY_PROP_ONLINE,
-	POWER_SUPPLY_PROP_STATUS,
-	POWER_SUPPLY_PROP_VOLTAGE_NOW,
-	POWER_SUPPLY_PROP_CURRENT_NOW,
-	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
-};
-
-static const struct power_supply_desc sc8547_psy_desc = {
-	.name		= "sc8547",
-	.type		= POWER_SUPPLY_TYPE_USB,
-	.properties	= sc8547_psy_props,
-	.num_properties	= ARRAY_SIZE(sc8547_psy_props),
-	.get_property	= sc8547_psy_get_property,
-	.set_property	= sc8547_psy_set_property,
-};
-
 /* ---------- DT 解析 ---------- */
 
 static int sc8547_parse_dt(struct sc8547 *chip)
@@ -870,11 +751,6 @@ static int sc8547_parse_dt(struct sc8547 *chip)
 	ret = of_property_read_u32(np, "oplus,pps_ocp_max", &chip->pps_ocp_max);
 	if (ret)
 		chip->pps_ocp_max = 3600;
-
-	ret = of_property_read_u32(np, "southchip,auto-enable-mv",
-				   &chip->auto_enable_mv);
-	if (ret)
-		chip->auto_enable_mv = SC8547_AUTO_ENABLE_MV;
 
 	chip->is_master = of_property_read_bool(np, "southchip,master");
 
@@ -923,12 +799,9 @@ static int sc8547_probe(struct i2c_client *client)
 
 	INIT_WORK(&chip->irq_work, sc8547_irq_work);
 	INIT_DELAYED_WORK(&chip->kick_dog_work, sc8547_kick_dog_work);
-	INIT_WORK(&chip->state_work, sc8547_state_work);
-
-	chip->usb_nb.notifier_call = sc8547_usb_notify;
-	power_supply_reg_notifier(&chip->usb_nb);
-	/* evaluate the current source immediately */
-	schedule_work(&chip->state_work);
+	INIT_DELAYED_WORK(&chip->auto_enable_work, sc8547_auto_enable_worker);
+    schedule_delayed_work(&chip->auto_enable_work,
+		      msecs_to_jiffies(SC8547_AUTO_CHECK_INTERVAL_MS));
 
 	if (client->irq > 0) {
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
@@ -943,17 +816,6 @@ static int sc8547_probe(struct i2c_client *client)
 			chip->irq = client->irq;
 	}
 
-	{
-		struct power_supply_config psy_cfg = { .drv_data = chip };
-
-		chip->psy = devm_power_supply_register(&client->dev,
-						       &sc8547_psy_desc,
-						       &psy_cfg);
-		if (IS_ERR(chip->psy))
-			return dev_err_probe(&client->dev, PTR_ERR(chip->psy),
-					     "failed to register power supply\n");
-	}
-
 	dev_info(&client->dev, "probe done (%s, %s)\n",
 		 chip->is_master ? "master" : "slave",
 		 chip->ic_sc8547a ? "SC8547A" : "SC8547");
@@ -964,10 +826,8 @@ static void sc8547_remove(struct i2c_client *client)
 {
 	struct sc8547 *chip = i2c_get_clientdata(client);
 
-	power_supply_unreg_notifier(&chip->usb_nb);
 	cancel_work_sync(&chip->irq_work);
-	cancel_work_sync(&chip->state_work);
-	cancel_delayed_work_sync(&chip->kick_dog_work);
+	cancel_delayed_work_sync(&chip->auto_enable_work);
 	sc8547_set_chg_enable(chip, false);
 	sc8547_set_adc_enable(chip, false);
 	dev_info(chip->dev, "removed\n");
@@ -977,9 +837,7 @@ static void sc8547_shutdown(struct i2c_client *client)
 {
 	struct sc8547 *chip = i2c_get_clientdata(client);
 
-	power_supply_unreg_notifier(&chip->usb_nb);
-	cancel_work_sync(&chip->state_work);
-	cancel_delayed_work_sync(&chip->kick_dog_work);
+	cancel_delayed_work_sync(&chip->auto_enable_work);
 	sc8547_set_chg_enable(chip, false);
 	sc8547_set_adc_enable(chip, false);
 }

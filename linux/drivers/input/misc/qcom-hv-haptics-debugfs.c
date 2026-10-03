@@ -656,12 +656,12 @@ static int haptics_add_debugfs(struct dentry *hap_dir, struct haptics_effect *ef
 	return rc;
 }
 
-void haptics_remove_debugfs(struct haptics_chip *chip)
+static void haptics_remove_debugfs(struct haptics_chip *chip)
 {
 	debugfs_remove_recursive(chip->debugfs_dir);
 }
 
-int haptics_create_debugfs(struct haptics_chip *chip)
+static int haptics_create_debugfs(struct haptics_chip *chip)
 {
 	struct dentry *hap_dir, *file;
 	int rc = 0;
