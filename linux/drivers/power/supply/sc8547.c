@@ -57,6 +57,7 @@ struct sc8547 {
 	u8			ovp_reg;
 	u8			ocp_reg;
 	u32			pps_ocp_max;
+	u32			auto_enable_mv;
 
 	int			irq;
 	struct work_struct	irq_work;
@@ -415,7 +416,7 @@ static void sc8547_state_work(struct work_struct *work)
 	 */
 	want = online &&
 	       (usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS ||
-		vbus_uv >= SC8547_AUTO_ENABLE_MV * 1000);
+		vbus_uv >= chip->auto_enable_mv * 1000);
 
 	if (sc8547_get_chg_enable(chip, &cp_en))
 		return;
@@ -829,6 +830,11 @@ static int sc8547_parse_dt(struct sc8547 *chip)
 	ret = of_property_read_u32(np, "oplus,pps_ocp_max", &chip->pps_ocp_max);
 	if (ret)
 		chip->pps_ocp_max = 3600;
+
+	ret = of_property_read_u32(np, "southchip,auto-enable-mv",
+				   &chip->auto_enable_mv);
+	if (ret)
+		chip->auto_enable_mv = SC8547_AUTO_ENABLE_MV;
 
 	chip->is_master = of_property_read_bool(np, "southchip,master");
 
