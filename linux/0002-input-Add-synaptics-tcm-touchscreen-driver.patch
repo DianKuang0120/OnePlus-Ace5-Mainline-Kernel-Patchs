@@ -1,11 +1,9 @@
-diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
-index aeaf9a9cbb41..dc72bc0be1f2 100644
 --- a/drivers/input/touchscreen/Kconfig
 +++ b/drivers/input/touchscreen/Kconfig
-@@ -1308,6 +1308,17 @@ config TOUCHSCREEN_SX8654
+@@ -1310,6 +1310,17 @@
  	  To compile this driver as a module, choose M here: the
  	  module will be called sx8654.
-
+ 
 +config TOUCHSCREEN_SYNA_TCM
 +	tristate "Synaptics TouchComm (TCM) SPI touchscreen"
 +	depends on SPI_MASTER
@@ -20,11 +18,9 @@ index aeaf9a9cbb41..dc72bc0be1f2 100644
  config TOUCHSCREEN_TPS6507X
  	tristate "TPS6507x based touchscreens"
  	depends on I2C
-diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
-index f2b002abebe8..6aec98fda322 100644
 --- a/drivers/input/touchscreen/Makefile
 +++ b/drivers/input/touchscreen/Makefile
-@@ -109,6 +109,7 @@ wm97xx-ts-$(CONFIG_TOUCHSCREEN_WM9712)	+= wm9712.o
+@@ -109,6 +109,7 @@
  wm97xx-ts-$(CONFIG_TOUCHSCREEN_WM9713)	+= wm9713.o
  obj-$(CONFIG_TOUCHSCREEN_WM97XX_MAINSTONE)	+= mainstone-wm97xx.o
  obj-$(CONFIG_TOUCHSCREEN_SX8654)	+= sx8654.o

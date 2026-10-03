@@ -1,8 +1,6 @@
-diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
-index 269c31ce0814..c3ba45d4618e 100644
 --- a/sound/soc/codecs/Kconfig
 +++ b/sound/soc/codecs/Kconfig
-@@ -248,6 +248,7 @@ config SND_SOC_ALL_CODECS
+@@ -250,6 +250,7 @@
  	imply SND_SOC_SDW_MOCKUP
  	imply SND_SOC_SGTL5000
  	imply SND_SOC_SI476X
@@ -10,10 +8,10 @@ index 269c31ce0814..c3ba45d4618e 100644
  	imply SND_SOC_SIMPLE_AMPLIFIER
  	imply SND_SOC_SIMPLE_MUX
  	imply SND_SOC_SMA1303
-@@ -2031,6 +2032,17 @@ config SND_SOC_SI476X
+@@ -2048,6 +2049,17 @@
  	tristate
  	depends on MFD_SI476X_CORE
-
+ 
 +config SND_SOC_SIA91XX
 +	tristate "SI-IN SIA91xx smart amplifiers"
 +	depends on I2C
@@ -28,11 +26,9 @@ index 269c31ce0814..c3ba45d4618e 100644
  config SND_SOC_SIGMADSP
  	tristate
  	select CRC32
-diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
-index 172861d17cfd..c5187356cd14 100644
 --- a/sound/soc/codecs/Makefile
 +++ b/sound/soc/codecs/Makefile
-@@ -291,6 +291,7 @@ snd-soc-sdw-mockup-y := sdw-mockup.o
+@@ -293,6 +293,7 @@
  snd-soc-sgtl5000-y := sgtl5000.o
  snd-soc-alc5623-y := alc5623.o
  snd-soc-alc5632-y := alc5632.o
@@ -40,7 +36,7 @@ index 172861d17cfd..c5187356cd14 100644
  snd-soc-sigmadsp-y := sigmadsp.o
  snd-soc-sigmadsp-i2c-y := sigmadsp-i2c.o
  snd-soc-sigmadsp-regmap-y := sigmadsp-regmap.o
-@@ -725,6 +726,7 @@ obj-$(CONFIG_SND_SOC_RTQ9124)	+= snd-soc-rtq9124.o
+@@ -731,6 +732,7 @@
  obj-$(CONFIG_SND_SOC_RTQ9128)	+= snd-soc-rtq9128.o
  obj-$(CONFIG_SND_SOC_SDW_MOCKUP)     += snd-soc-sdw-mockup.o
  obj-$(CONFIG_SND_SOC_SGTL5000)  += snd-soc-sgtl5000.o

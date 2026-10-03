@@ -1,11 +1,10 @@
-diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
-index d592f4f4b939..6a90ce3510e4 100644
 --- a/drivers/gpu/drm/panel/Kconfig
 +++ b/drivers/gpu/drm/panel/Kconfig
-@@ -45,6 +45,18 @@ config DRM_PANEL_AUO_A030JTN01
+@@ -44,6 +44,18 @@
+ 	help
  	  Say Y here to enable support for the AUO A030JTN01 320x480 3.0" panel
  	  as found in the YLM RS-97 handheld gaming console.
-
++
 +config DRM_PANEL_BOE_AA577
 +  tristate "BOE AA577 DSC cmd mode panel"
 +  depends on OF
@@ -17,15 +16,12 @@ index d592f4f4b939..6a90ce3510e4 100644
 +    Say Y here if you want to enable support for BOE AA577 panel as
 +    found in OnePlus 13R / Ace 5 (giulia). The panel has a 1264x2780
 +    resolution and uses 30 bit RGB per pixel.
-+
+ 
  config DRM_PANEL_BOE_BF060Y8M_AJ0
  	tristate "Boe BF060Y8M-AJ0 panel"
- 	depends on OF
-diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
-index a4291dc3905b..ff45ae701be1 100644
 --- a/drivers/gpu/drm/panel/Makefile
 +++ b/drivers/gpu/drm/panel/Makefile
-@@ -3,6 +3,7 @@ obj-$(CONFIG_DRM_PANEL_ABT_Y030XX067A) += panel-abt-y030xx067a.o
+@@ -3,6 +3,7 @@
  obj-$(CONFIG_DRM_PANEL_ARM_VERSATILE) += panel-arm-versatile.o
  obj-$(CONFIG_DRM_PANEL_ASUS_Z00T_TM5P5_NT35596) += panel-asus-z00t-tm5p5-n35596.o
  obj-$(CONFIG_DRM_PANEL_AUO_A030JTN01) += panel-auo-a030jtn01.o

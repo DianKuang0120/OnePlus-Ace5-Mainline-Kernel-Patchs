@@ -1,6 +1,6 @@
 --- a/drivers/iio/magnetometer/Kconfig
 +++ b/drivers/iio/magnetometer/Kconfig
-@@ -56,6 +56,29 @@ config AK09911
+@@ -54,6 +54,29 @@
  	help
  	  Deprecated: AK09911 is now supported by AK8975 driver.
  

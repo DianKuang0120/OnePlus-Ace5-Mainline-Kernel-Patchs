@@ -1,16 +1,17 @@
 --- a/arch/arm64/boot/dts/qcom/sm8650.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm8650.dtsi
-@@ -1021,7 +1021,7 @@
+@@ -3626,8 +3626,8 @@
  
  			operating-points-v2 = <&pcie0_opp_table>;
  
- 			iommu-map = <0     &apps_smmu 0x1400 0x0 0x1>,
+-			iommu-map = <0     &apps_smmu 0x1400 0x0 0x1>,
 -				    <0x100 &apps_smmu 0x1401 0x0 0x1>;
++			iommu-map = <0     &apps_smmu 0x1400 0x1>,
 +				    <0x100 &apps_smmu 0x1401 0x1>;
  
  			interrupt-map = <0 0 0 1 &intc 0 0 GIC_SPI 149 IRQ_TYPE_LEVEL_HIGH 0>,
- 			interrupt-map-mask = <0 0 0 0x7>;
-@@ -1155,7 +1155,7 @@
+ 					<0 0 0 2 &intc 0 0 GIC_SPI 150 IRQ_TYPE_LEVEL_HIGH 0>,
+@@ -3819,8 +3819,8 @@
  
  			operating-points-v2 = <&pcie1_opp_table>;
  
@@ -20,4 +21,4 @@
 +				    <0x100 &apps_smmu 0x1481 0x1>;
  
  			interrupt-map = <0 0 0 1 &intc 0 0 GIC_SPI 434 IRQ_TYPE_LEVEL_HIGH 0>,
- 			interrupt-map-mask = <0 0 0 0x7>;
+ 					<0 0 0 2 &intc 0 0 GIC_SPI 435 IRQ_TYPE_LEVEL_HIGH 0>,

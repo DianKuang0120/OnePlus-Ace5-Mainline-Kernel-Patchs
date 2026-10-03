@@ -1,20 +1,16 @@
-diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
-index b4943123d2e4..16b5c40cadd8 100644
 --- a/Documentation/devicetree/bindings/arm/qcom.yaml
 +++ b/Documentation/devicetree/bindings/arm/qcom.yaml
-@@ -1102,6 +1102,7 @@ properties:
+@@ -1115,6 +1115,7 @@
        - items:
            - enum:
                - ayaneo,pocket-s2
 +              - oneplus,giulia
                - qcom,sm8650-hdk
                - qcom,sm8650-mtp
-               - qcom,sm8650-qrd
-diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
-index 4ba8e7306419..a3c183e916f8 100644
+               - qcom,sm8650-qrd               
 --- a/arch/arm64/boot/dts/qcom/Makefile
 +++ b/arch/arm64/boot/dts/qcom/Makefile
-@@ -389,6 +389,7 @@ dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-hdk-display-card.dtb
+@@ -397,6 +397,7 @@
  dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-hdk-rear-camera-card.dtb
  dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-hdk.dtb
  dtb-$(CONFIG_ARCH_QCOM)	+= sm8650-mtp.dtb

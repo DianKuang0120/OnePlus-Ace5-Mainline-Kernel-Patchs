@@ -1,17 +1,20 @@
-diff --git a/drivers/power/supply/Makefile b/drivers/power/supply/Makefile
 --- a/drivers/power/supply/Makefile
 +++ b/drivers/power/supply/Makefile
-@@ -104,3 +104,4 @@ obj-$(CONFIG_CHARGER_BD99954)	+= bd99954.o
+@@ -102,6 +102,7 @@
+ obj-$(CONFIG_CHARGER_BQ24257)	+= bq24257_charger.o
+ obj-$(CONFIG_CHARGER_BQ24735)	+= bq24735-charger.o
  obj-$(CONFIG_CHARGER_BQ2515X)	+= bq2515x_charger.o
 +obj-$(CONFIG_CHARGER_SC8547)	+= sc8547.o
  obj-$(CONFIG_CHARGER_BQ257XX)	+= bq257xx_charger.o
-
-diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
+ obj-$(CONFIG_CHARGER_BQ25890)	+= bq25890_charger.o
+ obj-$(CONFIG_CHARGER_BQ25980)	+= bq25980_charger.o
 --- a/drivers/power/supply/Kconfig
 +++ b/drivers/power/supply/Kconfig
-@@ -803,3 +803,12 @@ config CHARGER_BQ24735
+@@ -801,6 +801,15 @@
+ 	depends on GPIOLIB || COMPILE_TEST
+ 	help
  	  Say Y to enable support for the TI BQ24735 battery charger.
- 
++
 +config CHARGER_SC8547
 +	tristate "SC8547 charge pump driver"
 +	depends on I2C
@@ -20,5 +23,6 @@ diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
 +	  on some Oplus/OnePlus phones for high-power fast charging.
 +
 +	  To compile this driver as a module, choose M here.
-+
+ 
  config CHARGER_BQ2515X
+ 	tristate "TI BQ2515X battery charger family"
