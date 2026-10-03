@@ -759,7 +759,7 @@
 
 		clocks = <&camcc CAM_CC_MCLK2_CLK>;
 		assigned-clocks = <&camcc CAM_CC_MCLK2_CLK>;
-		assigned-clock-rates = <24000000>;
+		assigned-clock-rates = <19200000>;
 
 		reset-gpios = <&tlmm 14 GPIO_ACTIVE_LOW>;
 		pinctrl-0 = <&cam2_default>;
