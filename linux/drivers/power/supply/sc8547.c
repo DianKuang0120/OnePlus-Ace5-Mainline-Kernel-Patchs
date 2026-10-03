@@ -70,6 +70,8 @@ struct sc8547 {
 	struct notifier_block	usb_nb;
 	struct work_struct	state_work;
 	bool			cp_on;
+
+	struct power_supply	*psy;
 };
 
 static int sc8547_get_chg_enable(struct sc8547 *chip, bool *enabled);
@@ -727,6 +729,83 @@ static struct attribute *sc8547_attrs[] = {
 };
 ATTRIBUTE_GROUPS(sc8547);
 
+/* ---------- power_supply ---------- */
+
+static int sc8547_psy_get_property(struct power_supply *psy,
+				   enum power_supply_property psp,
+				   union power_supply_propval *val)
+{
+	struct sc8547 *chip = power_supply_get_drvdata(psy);
+	bool en = false;
+	int tmp;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_ONLINE:
+		if (sc8547_get_chg_enable(chip, &en))
+			en = false;
+		val->intval = en;
+		break;
+	case POWER_SUPPLY_PROP_STATUS:
+		if (sc8547_get_chg_enable(chip, &en))
+			en = false;
+		val->intval = en ? POWER_SUPPLY_STATUS_CHARGING :
+				   POWER_SUPPLY_STATUS_NOT_CHARGING;
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		if (sc8547_get_cp_vout(chip, &tmp))
+			return -EAGAIN;
+		val->intval = tmp * 1000;	/* mV -> uV */
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		if (sc8547_get_cp_ichg(chip, &tmp))
+			return -EAGAIN;
+		val->intval = tmp * 1000;	/* mA -> uA */
+		break;
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
+		val->intval = chip->pps_ocp_max * 1000;	/* mA -> uA */
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int sc8547_psy_set_property(struct power_supply *psy,
+				   enum power_supply_property psp,
+				   const union power_supply_propval *val)
+{
+	struct sc8547 *chip = power_supply_get_drvdata(psy);
+	u8 ocp;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
+		/* uA -> mA, clamped to the IBUS OCP field range */
+		ocp = clamp_val(val->intval / 1000, 0, SC8547_IBUS_OCP_MASK);
+		chip->ocp_reg = ocp;
+		return sc8547_write_byte(chip, SC8547_REG_05,
+					 0x20 | (ocp & SC8547_IBUS_OCP_MASK));
+	default:
+		return -EINVAL;
+	}
+}
+
+static const enum power_supply_property sc8547_psy_props[] = {
+	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
+};
+
+static const struct power_supply_desc sc8547_psy_desc = {
+	.name		= "sc8547",
+	.type		= POWER_SUPPLY_TYPE_USB,
+	.properties	= sc8547_psy_props,
+	.num_properties	= ARRAY_SIZE(sc8547_psy_props),
+	.get_property	= sc8547_psy_get_property,
+	.set_property	= sc8547_psy_set_property,
+};
+
 /* ---------- DT 解析 ---------- */
 
 static int sc8547_parse_dt(struct sc8547 *chip)
@@ -816,6 +895,17 @@ static int sc8547_probe(struct i2c_client *client)
 				 client->irq, ret);
 		else
 			chip->irq = client->irq;
+	}
+
+	{
+		struct power_supply_config psy_cfg = { .drv_data = chip };
+
+		chip->psy = devm_power_supply_register(&client->dev,
+						       &sc8547_psy_desc,
+						       &psy_cfg);
+		if (IS_ERR(chip->psy))
+			return dev_err_probe(&client->dev, PTR_ERR(chip->psy),
+					     "failed to register power supply\n");
 	}
 
 	dev_info(&client->dev, "probe done (%s, %s)\n",
