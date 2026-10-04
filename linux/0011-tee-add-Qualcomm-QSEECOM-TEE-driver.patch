@@ -1,0 +1,75 @@
+diff --git a/drivers/tee/Kconfig b/drivers/tee/Kconfig
+--- a/drivers/tee/Kconfig
++++ b/drivers/tee/Kconfig
+@@ -21,5 +21,6 @@ source "drivers/tee/optee/Kconfig"
+ source "drivers/tee/amdtee/Kconfig"
+ source "drivers/tee/tstee/Kconfig"
+ source "drivers/tee/qcomtee/Kconfig"
++source "drivers/tee/qseecom/Kconfig"
+ 
+ endif
+diff --git a/drivers/tee/Makefile b/drivers/tee/Makefile
+--- a/drivers/tee/Makefile
++++ b/drivers/tee/Makefile
+@@ -8,3 +8,4 @@ obj-$(CONFIG_OPTEE) += optee/
+ obj-$(CONFIG_AMDTEE) += amdtee/
+ obj-$(CONFIG_ARM_TSTEE) += tstee/
+ obj-$(CONFIG_QCOMTEE) += qcomtee/
++obj-$(CONFIG_TEE_QSEECOM) += qseecom/
+diff --git a/drivers/soc/qcom/Kconfig b/drivers/soc/qcom/Kconfig
+--- a/drivers/soc/qcom/Kconfig
++++ b/drivers/soc/qcom/Kconfig
+@@ -59,8 +59,16 @@ config QCOM_KRYO_L2_ACCESSORS
+ 	depends on (ARCH_QCOM || COMPILE_TEST) && ARM64
+ 
+ config QCOM_MDT_LOADER
+-	tristate
++	tristate "Qualcomm MDT firmware loader"
++	depends on ARCH_QCOM || COMPILE_TEST
+ 	select QCOM_SCM
++	help
++	  Say y here to enable support for loading firmware in the Qualcomm
++	  MDT format: an ELF-like metadata file describing segments that are
++	  either carried in the same file or split out into .bNN files beside
++	  it. Drivers that load firmware into a Qualcomm remote processor or
++	  secure environment select this; it is also user-selectable so that
++	  it can be built for a consumer that only needs the parsing.
+ 
+ config QCOM_OCMEM
+ 	tristate "Qualcomm On Chip Memory (OCMEM) driver"
+diff --git a/include/uapi/linux/tee.h b/include/uapi/linux/tee.h
+--- a/include/uapi/linux/tee.h
++++ b/include/uapi/linux/tee.h
+@@ -60,6 +60,7 @@
+ #define TEE_IMPL_ID_AMDTEE	2
+ #define TEE_IMPL_ID_TSTEE	3
+ #define TEE_IMPL_ID_QTEE	4
++#define TEE_IMPL_ID_QSEECOM	5
+ 
+ /*
+  * OP-TEE specific capabilities
+diff --git a/MAINTAINERS b/MAINTAINERS
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -22087,6 +22087,13 @@ L:	linux-arm-msm@vger.kernel.org
+ S:	Maintained
+ F:	drivers/firmware/qcom/qcom_qseecom.c
+ 
++QUALCOMM QSEECOM TEE DRIVER
++M:	Dawid Wróbel <me@dawidwrobel.com>
++L:	linux-arm-msm@vger.kernel.org
++S:	Maintained
++F:	Documentation/tee/qseecom.rst
++F:	drivers/tee/qseecom/
++
+ QUALCOMM QSEECOM UEFISECAPP DRIVER
+ M:	Maximilian Luz <luzmaximilian@gmail.com>
+ L:	linux-arm-msm@vger.kernel.org
+diff --git a/Documentation/tee/index.rst b/Documentation/tee/index.rst
+--- a/Documentation/tee/index.rst
++++ b/Documentation/tee/index.rst
+@@ -12,3 +12,4 @@ TEE Subsystem
+    amd-tee
+    ts-tee
+    qtee
++   qseecom

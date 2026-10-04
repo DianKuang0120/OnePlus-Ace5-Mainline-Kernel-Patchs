@@ -1,0 +1,38 @@
+diff --git a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -248,6 +248,23 @@ config INPUT_PMIC8XXX_PWRKEY
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called pmic8xxx-pwrkey.
+ 
++config INPUT_GOODIX_FP_SPI
++	tristate "Goodix SPI fingerprint sensor driver"
++	depends on INPUT && OF_GPIO && NET
++	help
++	  Say Y here to enable the driver for Goodix SPI fingerprint
++	  sensors. It controls the sensor supply, reset and interrupt
++	  lines, and exposes the /dev/goodix_fp ioctl and netlink ABI the
++	  fingerprint HAL expects.
++
++	  Only sensors driven by a TrustZone application are currently
++	  supported. Their SPI bus belongs to the secure world, which
++	  captures and matches fingerprints there. Sensors the operating
++	  system drives itself need SPI transfers this driver does not
++	  currently implement.
++
++	  If unsure, say N.
++
+ config INPUT_SPARCSPKR
+ 	tristate "SPARC Speaker support"
+ 	depends on PCI && SPARC64
+diff --git a/drivers/input/misc/Makefile b/drivers/input/misc/Makefile
+--- a/drivers/input/misc/Makefile
++++ b/drivers/input/misc/Makefile
+@@ -39,6 +39,7 @@ obj-$(CONFIG_INPUT_E3X0_BUTTON)		+= e3x0-button.o
+ obj-$(CONFIG_INPUT_DRV260X_HAPTICS)	+= drv260x.o
+ obj-$(CONFIG_INPUT_DRV2665_HAPTICS)	+= drv2665.o
+ obj-$(CONFIG_INPUT_DRV2667_HAPTICS)	+= drv2667.o
++obj-$(CONFIG_INPUT_GOODIX_FP_SPI)	+= goodix_fp_spi.o
+ obj-$(CONFIG_INPUT_GPIO_BEEPER)		+= gpio-beeper.o
+ obj-$(CONFIG_INPUT_GPIO_DECODER)	+= gpio_decoder.o
+ obj-$(CONFIG_INPUT_GPIO_VIBRA)		+= gpio-vibra.o

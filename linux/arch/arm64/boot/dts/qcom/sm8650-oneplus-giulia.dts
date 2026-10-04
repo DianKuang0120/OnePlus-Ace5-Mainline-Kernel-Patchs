@@ -290,6 +290,33 @@
 		gpio = <&tlmm 108 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 	};
+
+	/*
+	 * Goodix under-display optical fingerprint sensor (UFF), driven from
+	 * QSEE in TEE mode: the SPI bus and all biometric logic belong to the
+	 * secure world, so the AP only owns the supply, the reset line and no
+	 * interrupt.  Finger events are delivered to userspace by the
+	 * touchscreen, which is why there is no "interrupts" here.
+	 *
+	 * "firmware-name" is the trusted application the QSEECOM TEE driver
+	 * loads from the vendor firmware; on giulia it is "uff_spi"
+	 * (/odm/vendor/firmware/uff_spi.mdt).
+	 *
+	 * NOTE: the real part is a GW in-display sensor; "goodix,gf3626" is
+	 * used here as the reference driver's tested compatible until the
+	 * exact part is known.
+	 */
+	fingerprint {
+		compatible = "goodix,gf3626";
+
+		reset-gpios = <&tlmm 89 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&vreg_l14b_3p2>;
+
+		firmware-name = "uff_spi";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&fp_reset_default>;
+	};
 };
 
 &apps_rsc {
@@ -1598,5 +1625,14 @@
 		function = "gpio";
 		drive-strength = <2>;
 		bias-disable;
+	};
+
+	/* Goodix UFF fingerprint reset: GPIO89, held low (asserted) by default */
+	fp_reset_default: fp-reset-default-state {
+		pins = "gpio89";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
 	};
 };
