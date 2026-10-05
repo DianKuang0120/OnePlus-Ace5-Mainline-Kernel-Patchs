@@ -32,6 +32,6 @@
 | Flash                | pm8350c flash-led       | ✅    |
 | Calls                |                         | ❌    |
 | SMS                  |                         | ❌    |
-| Mobile Data          | Needs IPA rules engine  | ❌    |
+| Mobile Data          | SM8650 consumer endpoints (IPA) | ✅    |
 | Display              | Off-tree                | ✅    |
 | Haptics              | driver + userspace event daemon | ✅    |
