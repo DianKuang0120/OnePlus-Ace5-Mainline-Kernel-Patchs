@@ -59,6 +59,24 @@
 
 		orientation-gpios = <&tlmm 29 GPIO_ACTIVE_HIGH>;
 
+		/*
+		 * OnePlus PPS charge-pump bring-up gates (qcom_battmgr OnePlus
+		 * PPS patch).  The 2:1 policy service requires the whole chain:
+		 * read-buffer -> fixed-5V -> 5.5V -> 9V -> 2:1 ramp -> 5m run ->
+		 * policy, with auto-start.  The secondary/dual gates are left
+		 * disabled; enable them only when testing the dual-pump path.
+		 */
+		oneplus,pps-read-buffer;
+		oneplus,pps-fixed-5v;
+		oneplus,pps-5v5-1a;
+		oneplus,pps-ramp-9v-1a;
+		oneplus,pps-ramp-9v2-1a;
+		oneplus,pps-ramp-2to1-1a;
+		oneplus,pps-run-2to1-5m;
+		oneplus,pps-policy-2to1-1a;
+		oneplus,pps-secondary-500ms;
+		oneplus,pps-dual-500ms;
+
 		connector@0 {
 			compatible = "usb-c-connector";
 			reg = <0>;
@@ -1520,6 +1538,39 @@
 		reg = <0x6a>;
 
 		southchip,master;
+		southchip,role = "primary";
+		southchip,psy-name = "sc8547-primary";
+
+		/*
+		 * Development bring-up: expose the SC8547D charge-pump write
+		 * path used by the qcom_battmgr OnePlus PPS patch.  The raw
+		 * protection profile matches the downstream SC8547D
+		 * sc8547_init_device() image; the voltage window is derived from
+		 * the validated 2:1 envelope (7.3-9.4 V input, 3.60-4.35 V cell,
+		 * start target 2*VBAT + 0.45 V with 0.20 V overshoot, 70 C die).
+		 * Re-validate these bounds on giulia before daily use.
+		 */
+		southchip,allow-experimental-control;
+		southchip,allow-experimental-cp-enable;
+		southchip,allow-experimental-cp-pulse;
+
+		southchip,experimental-reg00 = <0x36>; /* BAT OVP  */
+		southchip,experimental-reg01 = <0xbf>; /* BAT OCP  */
+		southchip,experimental-reg02 = <0x01>; /* AC OVP   */
+		southchip,experimental-reg04 = <0x50>; /* VBUS OVP */
+		southchip,experimental-reg05 = <0x1e>; /* IBUS OCP */
+		southchip,experimental-reg0d = <0x70>; /* PMID2OUT */
+
+		southchip,experimental-vbus-min-uv = <7300000>;
+		southchip,experimental-vbus-max-uv = <9400000>;
+		southchip,experimental-vbat-min-uv = <3600000>;
+		southchip,experimental-vbat-max-uv = <4350000>;
+		southchip,experimental-pulse-vbus-min-uv = <7300000>;
+		southchip,experimental-start-delta-uv = <450000>;
+		southchip,experimental-start-overshoot-max-uv = <200000>;
+		southchip,experimental-start-reference-max-uv = <4350000>;
+		southchip,experimental-pulse-ratio-error-max-uv = <250000>;
+		southchip,experimental-tdie-max-mc = <70000>;
 
 		ovp_reg = <0x36>;
 		ocp_reg = <0x0e>;
@@ -1540,6 +1591,32 @@
 	sc8547_slave: charger@6a {
 		compatible = "southchip,sc8547";
 		reg = <0x6a>;
+
+		southchip,role = "secondary";
+		southchip,psy-name = "sc8547-secondary";
+
+		/* Same development opt-in / SC8547D image as the primary. */
+		southchip,allow-experimental-control;
+		southchip,allow-experimental-cp-enable;
+		southchip,allow-experimental-cp-pulse;
+
+		southchip,experimental-reg00 = <0x36>;
+		southchip,experimental-reg01 = <0xbf>;
+		southchip,experimental-reg02 = <0x01>;
+		southchip,experimental-reg04 = <0x50>;
+		southchip,experimental-reg05 = <0x1e>;
+		southchip,experimental-reg0d = <0x70>;
+
+		southchip,experimental-vbus-min-uv = <7300000>;
+		southchip,experimental-vbus-max-uv = <9400000>;
+		southchip,experimental-vbat-min-uv = <3600000>;
+		southchip,experimental-vbat-max-uv = <4500000>;
+		southchip,experimental-pulse-vbus-min-uv = <7300000>;
+		southchip,experimental-start-delta-uv = <450000>;
+		southchip,experimental-start-overshoot-max-uv = <200000>;
+		southchip,experimental-start-reference-max-uv = <4350000>;
+		southchip,experimental-pulse-ratio-error-max-uv = <250000>;
+		southchip,experimental-tdie-max-mc = <70000>;
 
 		ovp_reg = <0x36>;
 		ocp_reg = <0x0e>;

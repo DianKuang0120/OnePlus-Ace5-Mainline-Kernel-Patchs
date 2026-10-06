@@ -1,28 +1,49 @@
 --- a/drivers/power/supply/Makefile
 +++ b/drivers/power/supply/Makefile
-@@ -102,6 +102,7 @@
+@@ -102,6 +102,9 @@
  obj-$(CONFIG_CHARGER_BQ24257)	+= bq24257_charger.o
  obj-$(CONFIG_CHARGER_BQ24735)	+= bq24735-charger.o
  obj-$(CONFIG_CHARGER_BQ2515X)	+= bq2515x_charger.o
 +obj-$(CONFIG_CHARGER_SC8547)	+= sc8547.o
++obj-$(CONFIG_CHARGER_SC8547_DUAL)	+= sc8547_dual.o
++obj-$(CONFIG_CHARGER_SC8547_POLICY_DIAG)	+= sc8547_policy_diag.o
  obj-$(CONFIG_CHARGER_BQ257XX)	+= bq257xx_charger.o
  obj-$(CONFIG_CHARGER_BQ25890)	+= bq25890_charger.o
  obj-$(CONFIG_CHARGER_BQ25980)	+= bq25980_charger.o
 --- a/drivers/power/supply/Kconfig
 +++ b/drivers/power/supply/Kconfig
-@@ -801,6 +801,15 @@
- 	depends on GPIOLIB || COMPILE_TEST
+@@ -802,6 +802,34 @@
  	help
  	  Say Y to enable support for the TI BQ24735 battery charger.
-+
+ 
 +config CHARGER_SC8547
-+	tristate "SC8547 charge pump driver"
++	tristate "SC8547/SC8547A/SC8547D charge pump driver"
 +	depends on I2C
++	select REGMAP_I2C
 +	help
-+	  Say Y to enable the SC8547 charge pump driver. This is used
++	  Say Y to enable the SC8547 family charge-pump driver. This is used
 +	  on some Oplus/OnePlus phones for high-power fast charging.
 +
 +	  To compile this driver as a module, choose M here.
- 
++
++config CHARGER_SC8547_DUAL
++	tristate "SC8547 dual charge-pump bring-up coordinator"
++	depends on CHARGER_SC8547
++	help
++	  Development-only coordinator for boards with two SC8547 charge
++	  pumps. Optional; the physical driver works without it.
++
++	  To compile this driver as a module, choose M here.
++
++config CHARGER_SC8547_POLICY_DIAG
++	tristate "SC8547 read-only source-contract diagnostic layer"
++	depends on CHARGER_SC8547_DUAL
++	help
++	  Development-only read-only diagnostic layer over the SC8547 dual
++	  coordinator.
++
++	  To compile this driver as a module, choose M here.
++
  config CHARGER_BQ2515X
  	tristate "TI BQ2515X battery charger family"
+ 	depends on I2C
