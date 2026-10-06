@@ -520,7 +520,7 @@
  	/*
  	 * @lock is used to prevent concurrent power supply requests to the
  	 * firmware, as it then stops responding.
-@@ -341,6 +786,5117 @@
+@@ -341,6 +786,5132 @@
  	struct mutex lock;
  };
  
@@ -833,19 +833,31 @@
 +	struct power_supply *cp_psy, bool use_vout, u32 *output_uv)
 +{
 +	union power_supply_propval val;
++	unsigned int attempt;
 +	int ret;
 +
-+	ret = power_supply_get_property(cp_psy, use_vout ?
-+					POWER_SUPPLY_PROP_VOLTAGE_AVG :
-+					POWER_SUPPLY_PROP_VOLTAGE_OCV,
-+					&val);
++	/*
++	 * A single I2C/ADC glitch (or one torn conversion) must not abort an
++	 * otherwise healthy run.  Re-read a bounded number of times; a
++	 * persistent error or a stuck zero still fails.
++	 */
++	for (attempt = 0; ; attempt++) {
++		ret = power_supply_get_property(cp_psy, use_vout ?
++						POWER_SUPPLY_PROP_VOLTAGE_AVG :
++						POWER_SUPPLY_PROP_VOLTAGE_OCV,
++						&val);
++		if (!ret && val.intval > 0) {
++			*output_uv = val.intval;
++			return 0;
++		}
++		if (attempt >= 2)
++			break;
++		usleep_range(10000, 20000);
++	}
++
 +	if (ret)
 +		return ret;
-+	if (val.intval <= 0)
-+		return -EAGAIN;
-+
-+	*output_uv = val.intval;
-+	return 0;
++	return -EAGAIN;
 +}
 +
 +static int qcom_battmgr_oneplus_set_cp_prepared(struct power_supply *cp_psy,
@@ -942,15 +954,18 @@
 +	int ret;
 +
 +	ret = qcom_battmgr_oneplus_require_cp_active(cp_psy, ibus_ua);
-+	if (ret && ret != -ERANGE)
++	if (ret && ret != -ERANGE && ret != -EIO)
 +		return ret;
 +	if (!ret && *ibus_ua <= ibus_max_ua)
 +		return 0;
 +
 +	/*
 +	 * Mirror the physical driver's numeric-window confirmation.  A stopped
-+	 * pump, status fault or I/O error remains immediate; only a zero or
-+	 * over-limit ADC value is sampled twice more before it becomes fatal.
++	 * pump, status fault or I/O error is re-sampled twice more before it
++	 * becomes fatal: giulia's SC8547D briefly drops its CP_SWITCHING status
++	 * during a PPS step (and the odd I2C/ADC read glitches), which must not
++	 * abort an otherwise healthy session.  A genuinely stopped pump fails
++	 * every recheck and still ends the run.
 +	 */
 +	for (attempt = 0;
 +	     attempt < BATTMGR_ONEPLUS_CP_DUAL_IBUS_RECHECKS; attempt++) {
@@ -958,7 +973,7 @@
 +			      BATTMGR_ONEPLUS_CP_DUAL_IBUS_RECHECK_MAX_US);
 +		(*range_rechecks)++;
 +		ret = qcom_battmgr_oneplus_require_cp_active(cp_psy, ibus_ua);
-+		if (ret && ret != -ERANGE)
++		if (ret && ret != -ERANGE && ret != -EIO)
 +			return ret;
 +		if (!ret && *ibus_ua <= ibus_max_ua) {
 +			(*range_recoveries)++;
@@ -5638,7 +5653,7 @@
  static int qcom_battmgr_request(struct qcom_battmgr *battmgr, void *data, size_t len)
  {
  	unsigned long left;
-@@ -989,6 +6545,11 @@
+@@ -989,6 +6560,11 @@
  
  	prop = sm8350_usb_prop_map[psp];
  
@@ -5650,7 +5665,7 @@
  	mutex_lock(&battmgr->lock);
  	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
  	mutex_unlock(&battmgr->lock);
-@@ -1209,16 +6770,43 @@
+@@ -1209,16 +6785,43 @@
  	case NOTIF_BAT_STATUS:
  	case NOTIF_BAT_PROPERTY:
  	case NOTIF_BAT_CHARGING_STATE:
@@ -5697,7 +5712,7 @@
  		break;
  	}
  }
-@@ -1364,6 +6952,8 @@
+@@ -1364,6 +6967,8 @@
  	complete(&battmgr->ack);
  }
  
@@ -5706,7 +5721,7 @@
  static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
  					 const struct qcom_battmgr_message *resp,
  					 size_t len)
-@@ -1371,6 +6961,7 @@
+@@ -1371,6 +6976,7 @@
  	unsigned int property;
  	unsigned int opcode = le32_to_cpu(resp->hdr.opcode);
  	size_t payload_len = len - sizeof(struct pmic_glink_hdr);
@@ -5714,7 +5729,7 @@
  	unsigned int val;
  
  	if (payload_len < sizeof(__le32)) {
-@@ -1427,7 +7018,20 @@
+@@ -1427,7 +7033,20 @@
  			battmgr->status.voltage_ocv = le32_to_cpu(resp->intval.value);
  			break;
  		case BATT_VOLT_NOW:
@@ -5736,7 +5751,7 @@
  			break;
  		case BATT_VOLT_MAX:
  			battmgr->info.voltage_max = le32_to_cpu(resp->intval.value);
-@@ -1516,6 +7120,15 @@
+@@ -1516,6 +7135,15 @@
  		case USB_TYPE:
  			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
  			break;
@@ -5752,7 +5767,7 @@
  		default:
  			dev_warn(battmgr->dev, "unknown property %#x\n", property);
  			break;
-@@ -1556,6 +7169,36 @@
+@@ -1556,6 +7184,36 @@
  			break;
  		}
  		break;
@@ -5789,7 +5804,7 @@
  	case BATTMGR_REQUEST_NOTIFICATION:
  	case BATTMGR_CHG_CTRL_LIMIT_EN:
  		battmgr->error = 0;
-@@ -1569,14 +7212,51 @@
+@@ -1569,14 +7227,51 @@
  	complete(&battmgr->ack);
  }
  
@@ -5842,7 +5857,7 @@
  	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
  		 battmgr->variant == QCOM_BATTMGR_X1E80100)
  		qcom_battmgr_sc8280xp_callback(battmgr, data, len);
-@@ -1594,24 +7274,179 @@
+@@ -1594,24 +7289,179 @@
  	};
  	int ret;
  
@@ -6025,7 +6040,7 @@
  	{ .compatible = "qcom,glymur-pmic-glink", .data = (void *)QCOM_BATTMGR_X1E80100 },
  	{ .compatible = "qcom,kaanapali-pmic-glink", .data = (void *)QCOM_BATTMGR_SM8550 },
  	{ .compatible = "qcom,sc8180x-pmic-glink", .data = (void *)QCOM_BATTMGR_SC8280XP },
-@@ -1624,6 +7459,13 @@
+@@ -1624,6 +7474,13 @@
  
  static char *qcom_battmgr_battery[] = { "battery" };
  
@@ -6039,7 +6054,7 @@
  static int qcom_battmgr_probe(struct auxiliary_device *adev,
  			      const struct auxiliary_device_id *id)
  {
-@@ -1640,6 +7482,7 @@
+@@ -1640,6 +7497,7 @@
  		return -ENOMEM;
  
  	battmgr->dev = dev;
@@ -6047,7 +6062,7 @@
  
  	psy_cfg.drv_data = battmgr;
  	psy_cfg.fwnode = dev_fwnode(&adev->dev);
-@@ -1649,15 +7492,124 @@
+@@ -1649,15 +7507,124 @@
  	psy_cfg_supply.supplied_to = qcom_battmgr_battery;
  	psy_cfg_supply.num_supplicants = 1;
  
@@ -6172,7 +6187,7 @@
  	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
  	if (ret < 0)
  		return dev_err_probe(dev, ret,
-@@ -1690,25 +7642,34 @@
+@@ -1690,25 +7657,34 @@
  			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
  					     "failed to register wireless charing power supply\n");
  	} else {
@@ -6220,7 +6235,7 @@
  	}
  
  	ret = devm_work_autocancel(dev, &battmgr->enable_work,
-@@ -1725,9 +7686,132 @@
+@@ -1725,9 +7701,132 @@
  
  	pmic_glink_client_register(battmgr->client);
  
@@ -6353,7 +6368,7 @@
  static const struct auxiliary_device_id qcom_battmgr_id_table[] = {
  	{ .name = "pmic_glink.power-supply", },
  	{},
-@@ -1737,6 +7821,7 @@
+@@ -1737,6 +7836,7 @@
  static struct auxiliary_driver qcom_battmgr_driver = {
  	.name = "pmic_glink_power_supply",
  	.probe = qcom_battmgr_probe,
