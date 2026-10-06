@@ -30,8 +30,8 @@
 | GPU                  |                         | ✅    |
 | Camera               | CAMSS up, sensor drivers missing | ❌    |
 | Flash                | pm8350c flash-led       | ✅    |
-| Calls                |                         | ❌    |
-| SMS                  |                         | ❌    |
-| Mobile Data          | SM8650 consumer endpoints (IPA) | ✅    |
+| Calls                | Needs VoLTE/IMS; modem has no CS+PS | ❌    |
+| SMS                  | Receive works; send fails (QMI WMS 56) | ⚠️ |
+| Mobile Data          | IPA sm8650 consumer endpoints 17/22/24 | ✅ |
 | Display              | Off-tree                | ✅    |
 | Haptics              | driver + userspace event daemon | ✅    |
