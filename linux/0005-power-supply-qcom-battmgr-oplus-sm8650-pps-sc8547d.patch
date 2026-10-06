@@ -83,7 +83,7 @@
  
  #define BATTMGR_WLS_PROPERTY_GET	0x34
  #define BATTMGR_WLS_PROPERTY_SET	0x35
-@@ -105,6 +141,175 @@
+@@ -105,6 +141,177 @@
  #define CHARGE_CTRL_END_THR_MAX		100
  #define CHARGE_CTRL_DELTA_SOC		5
  
@@ -127,6 +127,8 @@
 +#define BATTMGR_ONEPLUS_CP_DUAL_SECONDARY_RUN_MS	625000
 +#define BATTMGR_ONEPLUS_CP_DUAL_PRIMARY_RUN_MS	630000
 +#define BATTMGR_ONEPLUS_CP_DUAL_PRIMARY_SETTLE_MS	650
++#define BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_MS		200
++#define BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_RETRIES	15
 +#define BATTMGR_ONEPLUS_CP_DUAL_SECONDARY_SETTLE_MS	650
 +#define BATTMGR_ONEPLUS_CP_DUAL_IDLE_SETTLE_MS	1000
 +#define BATTMGR_ONEPLUS_CP_DUAL_ENTRY_DERATE_MV	40
@@ -259,7 +261,7 @@
  struct qcom_battmgr_enable_request {
  	struct pmic_glink_hdr hdr;
  	__le32 battery_id;
-@@ -146,6 +351,17 @@
+@@ -146,6 +353,17 @@
  	__le32 delta_soc;
  };
  
@@ -277,7 +279,7 @@
  struct qcom_battmgr_message {
  	struct pmic_glink_hdr hdr;
  	union {
-@@ -323,6 +539,229 @@
+@@ -323,6 +541,229 @@
  
  	int error;
  	struct completion ack;
@@ -507,7 +509,7 @@
  
  	bool service_up;
  
-@@ -334,6 +773,12 @@
+@@ -334,6 +775,12 @@
  
  	struct work_struct enable_work;
  
@@ -520,7 +522,7 @@
  	/*
  	 * @lock is used to prevent concurrent power supply requests to the
  	 * firmware, as it then stops responding.
-@@ -341,6 +786,5132 @@
+@@ -341,6 +788,5167 @@
  	struct mutex lock;
  };
  
@@ -982,6 +984,35 @@
 +	}
 +
 +	return ret ? ret : -ERANGE;
++}
++
++/*
++ * The dual coordinator starts each pump on its own kthread; the physical
++ * driver then runs its preflight/start sequence before REG07 is enabled.
++ * giulia's start latency varies and can exceed the fixed settle time, so wait
++ * for the pump to actually come up instead of sampling once.  A genuinely
++ * failed pump keeps failing every retry and still ends the wait.
++ */
++static int qcom_battmgr_oneplus_wait_cp_active(
++	struct power_supply *cp_psy, u32 *ibus_ua, u32 ibus_max_ua,
++	unsigned int wait_ms, unsigned int retries,
++	u32 *range_rechecks, u32 *range_recoveries)
++{
++	unsigned int attempt;
++	int ret;
++
++	for (attempt = 0; ; attempt++) {
++		ret = qcom_battmgr_oneplus_require_cp_active_bounded(
++			cp_psy, ibus_ua, ibus_max_ua,
++			range_rechecks, range_recoveries);
++		if (!ret)
++			return 0;
++		if (ret != -EIO && ret != -ERANGE)
++			return ret;
++		if (attempt >= retries)
++			return ret;
++		msleep(wait_ms);
++	}
 +}
 +
 +static int qcom_battmgr_oneplus_cancel_cp(struct power_supply *cp_psy)
@@ -3267,9 +3298,11 @@
 +	primary_started = true;
 +
 +	msleep(BATTMGR_ONEPLUS_CP_DUAL_PRIMARY_SETTLE_MS);
-+	primary_entry_rc = qcom_battmgr_oneplus_require_cp_active_bounded(
++	primary_entry_rc = qcom_battmgr_oneplus_wait_cp_active(
 +		primary_psy, &primary_entry_ibus_ua,
 +		BATTMGR_ONEPLUS_CP_DUAL_IBUS_MAX_UA,
++		BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_MS,
++		BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_RETRIES,
 +		&ibus_rechecks, &ibus_recoveries);
 +	if (primary_entry_rc) {
 +		ret = primary_entry_rc;
@@ -3372,14 +3405,18 @@
 +
 +	msleep(BATTMGR_ONEPLUS_CP_DUAL_SECONDARY_SETTLE_MS);
 +	primary_boost_pre_rc =
-+		qcom_battmgr_oneplus_require_cp_active_bounded(
++		qcom_battmgr_oneplus_wait_cp_active(
 +			primary_psy, &primary_boost_pre_ibus_ua,
 +			BATTMGR_ONEPLUS_CP_DUAL_IBUS_MAX_UA,
++			BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_MS,
++			BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_RETRIES,
 +			&ibus_rechecks, &ibus_recoveries);
 +	secondary_boost_pre_rc =
-+		qcom_battmgr_oneplus_require_cp_active_bounded(
++		qcom_battmgr_oneplus_wait_cp_active(
 +			secondary_psy, &secondary_boost_pre_ibus_ua,
 +			BATTMGR_ONEPLUS_CP_DUAL_IBUS_MAX_UA,
++			BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_MS,
++			BATTMGR_ONEPLUS_CP_DUAL_ENTRY_WAIT_RETRIES,
 +			&ibus_rechecks, &ibus_recoveries);
 +	if (primary_boost_pre_rc || secondary_boost_pre_rc) {
 +		ret = primary_boost_pre_rc ? primary_boost_pre_rc :
@@ -5653,7 +5690,7 @@
  static int qcom_battmgr_request(struct qcom_battmgr *battmgr, void *data, size_t len)
  {
  	unsigned long left;
-@@ -989,6 +6560,11 @@
+@@ -989,6 +6597,11 @@
  
  	prop = sm8350_usb_prop_map[psp];
  
@@ -5665,7 +5702,7 @@
  	mutex_lock(&battmgr->lock);
  	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
  	mutex_unlock(&battmgr->lock);
-@@ -1209,16 +6785,43 @@
+@@ -1209,16 +6822,43 @@
  	case NOTIF_BAT_STATUS:
  	case NOTIF_BAT_PROPERTY:
  	case NOTIF_BAT_CHARGING_STATE:
@@ -5712,7 +5749,7 @@
  		break;
  	}
  }
-@@ -1364,6 +6967,8 @@
+@@ -1364,6 +7004,8 @@
  	complete(&battmgr->ack);
  }
  
@@ -5721,7 +5758,7 @@
  static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
  					 const struct qcom_battmgr_message *resp,
  					 size_t len)
-@@ -1371,6 +6976,7 @@
+@@ -1371,6 +7013,7 @@
  	unsigned int property;
  	unsigned int opcode = le32_to_cpu(resp->hdr.opcode);
  	size_t payload_len = len - sizeof(struct pmic_glink_hdr);
@@ -5729,7 +5766,7 @@
  	unsigned int val;
  
  	if (payload_len < sizeof(__le32)) {
-@@ -1427,7 +7033,20 @@
+@@ -1427,7 +7070,20 @@
  			battmgr->status.voltage_ocv = le32_to_cpu(resp->intval.value);
  			break;
  		case BATT_VOLT_NOW:
@@ -5751,7 +5788,7 @@
  			break;
  		case BATT_VOLT_MAX:
  			battmgr->info.voltage_max = le32_to_cpu(resp->intval.value);
-@@ -1516,6 +7135,15 @@
+@@ -1516,6 +7172,15 @@
  		case USB_TYPE:
  			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
  			break;
@@ -5767,7 +5804,7 @@
  		default:
  			dev_warn(battmgr->dev, "unknown property %#x\n", property);
  			break;
-@@ -1556,6 +7184,36 @@
+@@ -1556,6 +7221,36 @@
  			break;
  		}
  		break;
@@ -5804,7 +5841,7 @@
  	case BATTMGR_REQUEST_NOTIFICATION:
  	case BATTMGR_CHG_CTRL_LIMIT_EN:
  		battmgr->error = 0;
-@@ -1569,14 +7227,51 @@
+@@ -1569,14 +7264,51 @@
  	complete(&battmgr->ack);
  }
  
@@ -5857,7 +5894,7 @@
  	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
  		 battmgr->variant == QCOM_BATTMGR_X1E80100)
  		qcom_battmgr_sc8280xp_callback(battmgr, data, len);
-@@ -1594,24 +7289,179 @@
+@@ -1594,24 +7326,179 @@
  	};
  	int ret;
  
@@ -5938,8 +5975,8 @@
 +
 +	schedule_delayed_work(&battmgr->oplus_keepalive_work,
 +			      msecs_to_jiffies(BATTMGR_OPLUS_KEEPALIVE_INTERVAL_MS));
-+}
-+
+ }
+ 
 +/*
 + * Read the battery voltage from the AP-side fuel gauge (BQ27Z561).
 + * Returns 0 if the gauge isn't registered yet.
@@ -5971,8 +6008,8 @@
 +	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
 +
 +	return sysfs_emit(buf, "%d\n", battmgr->otg_vbus);
- }
- 
++}
++
 +static ssize_t otg_vbus_store(struct device *dev, struct device_attribute *attr,
 +			      const char *buf, size_t count)
 +{
@@ -6040,7 +6077,7 @@
  	{ .compatible = "qcom,glymur-pmic-glink", .data = (void *)QCOM_BATTMGR_X1E80100 },
  	{ .compatible = "qcom,kaanapali-pmic-glink", .data = (void *)QCOM_BATTMGR_SM8550 },
  	{ .compatible = "qcom,sc8180x-pmic-glink", .data = (void *)QCOM_BATTMGR_SC8280XP },
-@@ -1624,6 +7474,13 @@
+@@ -1624,6 +7511,13 @@
  
  static char *qcom_battmgr_battery[] = { "battery" };
  
@@ -6054,7 +6091,7 @@
  static int qcom_battmgr_probe(struct auxiliary_device *adev,
  			      const struct auxiliary_device_id *id)
  {
-@@ -1640,6 +7497,7 @@
+@@ -1640,6 +7534,7 @@
  		return -ENOMEM;
  
  	battmgr->dev = dev;
@@ -6062,7 +6099,7 @@
  
  	psy_cfg.drv_data = battmgr;
  	psy_cfg.fwnode = dev_fwnode(&adev->dev);
-@@ -1649,15 +7507,124 @@
+@@ -1649,15 +7544,124 @@
  	psy_cfg_supply.supplied_to = qcom_battmgr_battery;
  	psy_cfg_supply.num_supplicants = 1;
  
@@ -6187,7 +6224,7 @@
  	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
  	if (ret < 0)
  		return dev_err_probe(dev, ret,
-@@ -1690,25 +7657,34 @@
+@@ -1690,25 +7694,34 @@
  			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
  					     "failed to register wireless charing power supply\n");
  	} else {
@@ -6235,7 +6272,7 @@
  	}
  
  	ret = devm_work_autocancel(dev, &battmgr->enable_work,
-@@ -1725,9 +7701,132 @@
+@@ -1725,9 +7738,132 @@
  
  	pmic_glink_client_register(battmgr->client);
  
@@ -6368,7 +6405,7 @@
  static const struct auxiliary_device_id qcom_battmgr_id_table[] = {
  	{ .name = "pmic_glink.power-supply", },
  	{},
-@@ -1737,6 +7836,7 @@
+@@ -1737,6 +7873,7 @@
  static struct auxiliary_driver qcom_battmgr_driver = {
  	.name = "pmic_glink_power_supply",
  	.probe = qcom_battmgr_probe,
