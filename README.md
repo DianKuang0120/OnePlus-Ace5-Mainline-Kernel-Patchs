@@ -30,7 +30,7 @@
 | GPU                  |                         | ✅    |
 | Camera               | CAMSS up, sensor drivers missing | ❌    |
 | Flash                | pm8350c flash-led       | ✅    |
-| Calls                | Needs VoLTE/IMS; modem has no CS+PS | ❌    |
+| Calls                | VoLTE: PDC profile active; needs AP IMS stack (OpenIMSd) | ❌ |
 | SMS                  | Receive works; send fails (QMI WMS 56) | ⚠️ |
 | Mobile Data          | IPA sm8650 consumer endpoints 17/22/24 | ✅ |
 | Display              | Off-tree                | ✅    |
