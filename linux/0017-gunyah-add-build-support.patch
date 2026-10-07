@@ -1,0 +1,39 @@
+diff --git a/arch/arm64/Kbuild b/arch/arm64/Kbuild
+--- a/arch/arm64/Kbuild
++++ b/arch/arm64/Kbuild
+@@ -7,6 +7,7 @@
+ obj-$(CONFIG_KVM)	+= kvm/
+ obj-$(CONFIG_XEN)	+= xen/
+ obj-$(subst m,y,$(CONFIG_HYPERV))	+= hyperv/
++obj-$(CONFIG_GUNYAH)	+= gunyah/
+ obj-$(CONFIG_CRYPTO)	+= crypto/
+ 
+ # for cleaning
+diff --git a/drivers/virt/Kconfig b/drivers/virt/Kconfig
+--- a/drivers/virt/Kconfig
++++ b/drivers/virt/Kconfig
+@@ -50,3 +50,4 @@
+ endif
+ 
+ source "drivers/virt/coco/Kconfig"
++source "drivers/virt/gunyah/Kconfig"
+diff --git a/drivers/virt/Makefile b/drivers/virt/Makefile
+--- a/drivers/virt/Makefile
++++ b/drivers/virt/Makefile
+@@ -10,3 +10,4 @@
+ obj-$(CONFIG_NITRO_ENCLAVES)	+= nitro_enclaves/
+ obj-$(CONFIG_ACRN_HSM)		+= acrn/
+ obj-y				+= coco/
++obj-y				+= gunyah/
+diff --git a/drivers/mailbox/Makefile b/drivers/mailbox/Makefile
+--- a/drivers/mailbox/Makefile
++++ b/drivers/mailbox/Makefile
+@@ -69,6 +69,8 @@
+ 
+ obj-$(CONFIG_ZYNQMP_IPI_MBOX)	+= zynqmp-ipi-mailbox.o
+ 
++obj-$(CONFIG_GUNYAH)		+= gunyah-msgq.o
++
+ obj-$(CONFIG_SUN6I_MSGBOX)	+= sun6i-msgbox.o
+ 
+ obj-$(CONFIG_SPRD_MBOX)		+= sprd-mailbox.o

@@ -22,13 +22,14 @@
 | Charging             |                         | ✅    |
 | WLAN                 | Uses random MAC         | ✅    |
 | CPU                  |                         | ✅    |
+| Gunyah               |                         | ✅    |
 | Touchscreen          | Off-tree                | ✅    |
 | Bluetooth            | Uses random MAC         | ✅    |
 | GPS                  |                         | ❌    |
 | Speakers             | Off-tree                | ✅    |
 | Microphones          | Bottom MIC for now      | ⚠️    |
 | GPU                  |                         | ✅    |
-| Camera               | CAMSS up, sensor drivers missing | ❌    |
+| Camera               | CAMSS up, sensor drivers missing | ❌ |
 | Flash                | pm8350c flash-led       | ✅    |
 | Calls                | VoLTE: PDC profile active; needs AP IMS stack (OpenIMSd) | ❌ |
 | SMS                  | Receive works; send fails (QMI WMS 56) | ⚠️ |

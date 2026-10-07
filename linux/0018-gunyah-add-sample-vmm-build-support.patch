@@ -1,0 +1,34 @@
+diff --git a/samples/Kconfig b/samples/Kconfig
+--- a/samples/Kconfig
++++ b/samples/Kconfig
+@@ -322,6 +322,14 @@
+ 	  Reading these files with multiple processes triggers hung task
+ 	  detection by holding locks for a long time (256 seconds).
+ 
++config SAMPLE_GUNYAH
++	bool "Build example Gunyah Virtual Machine Manager"
++	depends on CC_CAN_LINK && HEADERS_INSTALL
++	depends on GUNYAH
++	help
++	  Build an example Gunyah VMM userspace program capable of launching
++	  a basic virtual machine under the Gunyah hypervisor.
++
+ source "samples/rust/Kconfig"
+ 
+ source "samples/damon/Kconfig"
+diff --git a/samples/Makefile b/samples/Makefile
+--- a/samples/Makefile
++++ b/samples/Makefile
+@@ -45,3 +45,4 @@
+ obj-$(CONFIG_SAMPLE_DAMON_MTIER)	+= damon/
+ obj-$(CONFIG_SAMPLE_HUNG_TASK)		+= hung_task/
+ obj-$(CONFIG_SAMPLE_TSM_MR)		+= tsm-mr/
++obj-$(CONFIG_SAMPLE_GUNYAH)		+= gunyah/
+diff --git a/Documentation/virt/index.rst b/Documentation/virt/index.rst
+--- a/Documentation/virt/index.rst
++++ b/Documentation/virt/index.rst
+@@ -16,3 +16,4 @@
+    coco/sev-guest
+    coco/tdx-guest
+    hyperv/index
++   gunyah/index

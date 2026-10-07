@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=切回 Android
+Name[en]=Back to Android
+Comment=刷写 boot.img 到 boot_a 并重启
+Exec=/usr/local/bin/back-to-android-gui
+Terminal=false
+Icon=system-reboot
+Categories=System;Utility;
+Keywords=android;boot;flash;reboot;
