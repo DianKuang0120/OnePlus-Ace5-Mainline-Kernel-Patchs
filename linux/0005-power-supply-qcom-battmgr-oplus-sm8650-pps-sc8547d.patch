@@ -522,7 +522,7 @@
  	/*
  	 * @lock is used to prevent concurrent power supply requests to the
  	 * firmware, as it then stops responding.
-@@ -341,6 +788,5167 @@
+@@ -341,6 +788,5188 @@
  	struct mutex lock;
  };
  
@@ -1505,6 +1505,27 @@
 +	return len;
 +}
 +
++static int qcom_battmgr_get_batt_voltage_uv(struct qcom_battmgr *battmgr);
++
++/*
++ * Real battery voltage for the Oplus PPS paths.  The ADSP battery service
++ * reports a non-zero placeholder on these devices, so the AP-side gauge is the
++ * truth.  This performs an I2C read, so it must only be called from a
++ * sleepable context (the dual/policy kthreads), never from the pmic_glink RX
++ * callback.
++ */
++static int qcom_battmgr_oneplus_vbat_uv(struct qcom_battmgr *battmgr)
++{
++	if (battmgr->variant == QCOM_BATTMGR_OPLUS_SM8650) {
++		int uv = qcom_battmgr_get_batt_voltage_uv(battmgr);
++
++		if (uv > 0)
++			return uv;
++	}
++
++	return battmgr->status.voltage_now;
++}
++
 +static int qcom_battmgr_oneplus_ramp_2to1_run(
 +	struct qcom_battmgr *battmgr, const char *cp_name, bool policy_owned,
 +	bool run_owned, bool secondary_owned, bool dual_owned, u32 current_ma)
@@ -1593,7 +1614,7 @@
 +		if (ret)
 +			goto out_unlock;
 +		battmgr->oneplus_pps_vbat_attempts = attempt + 1;
-+		vbat_uv = battmgr->status.voltage_now;
++		vbat_uv = qcom_battmgr_oneplus_vbat_uv(battmgr);
 +		if (vbat_uv)
 +			break;
 +		if (attempt + 1 < BATTMGR_ONEPLUS_VBAT_ZERO_RETRIES)
@@ -2786,7 +2807,7 @@
 +		BATTMGR_BAT_PROPERTY_GET, BATT_VOLT_NOW, 0);
 +	if (ret)
 +		goto out_unlock;
-+	*vbat_uv = battmgr->status.voltage_now;
++	*vbat_uv = qcom_battmgr_oneplus_vbat_uv(battmgr);
 +	if (!*vbat_uv) {
 +		ret = -EAGAIN;
 +		goto out_unlock;
@@ -2850,7 +2871,7 @@
 +		BATTMGR_BAT_PROPERTY_GET, BATT_VOLT_NOW, 0);
 +	if (ret)
 +		goto out_unlock;
-+	*vbat_uv = battmgr->status.voltage_now;
++	*vbat_uv = qcom_battmgr_oneplus_vbat_uv(battmgr);
 +	if (!*vbat_uv) {
 +		ret = -EAGAIN;
 +		goto out_unlock;
@@ -4612,7 +4633,7 @@
 +		cancel_cp = true;
 +		goto out_unlock;
 +	}
-+	vbat_uv = battmgr->status.voltage_now;
++	vbat_uv = qcom_battmgr_oneplus_vbat_uv(battmgr);
 +	if (vbat_uv)
 +		battmgr->oneplus_policy_vbat_uv = vbat_uv;
 +	if (vbat_uv > BATTMGR_ONEPLUS_POLICY_VBAT_MAX_UV) {
@@ -4780,7 +4801,7 @@
 +		BATTMGR_BAT_PROPERTY_GET, BATT_VOLT_NOW, 0);
 +	if (ret)
 +		goto record_error;
-+	vbat_uv = battmgr->status.voltage_now;
++	vbat_uv = qcom_battmgr_oneplus_vbat_uv(battmgr);
 +	if (!vbat_uv) {
 +		ret = -EAGAIN;
 +		goto record_error;
@@ -5690,7 +5711,7 @@
  static int qcom_battmgr_request(struct qcom_battmgr *battmgr, void *data, size_t len)
  {
  	unsigned long left;
-@@ -989,6 +6597,11 @@
+@@ -989,6 +6618,11 @@
  
  	prop = sm8350_usb_prop_map[psp];
  
@@ -5702,7 +5723,7 @@
  	mutex_lock(&battmgr->lock);
  	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
  	mutex_unlock(&battmgr->lock);
-@@ -1209,16 +6822,43 @@
+@@ -1209,16 +6843,43 @@
  	case NOTIF_BAT_STATUS:
  	case NOTIF_BAT_PROPERTY:
  	case NOTIF_BAT_CHARGING_STATE:
@@ -5749,7 +5770,7 @@
  		break;
  	}
  }
-@@ -1364,6 +7004,8 @@
+@@ -1364,6 +7025,8 @@
  	complete(&battmgr->ack);
  }
  
@@ -5758,7 +5779,7 @@
  static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
  					 const struct qcom_battmgr_message *resp,
  					 size_t len)
-@@ -1371,6 +7013,7 @@
+@@ -1371,6 +7034,7 @@
  	unsigned int property;
  	unsigned int opcode = le32_to_cpu(resp->hdr.opcode);
  	size_t payload_len = len - sizeof(struct pmic_glink_hdr);
@@ -5766,25 +5787,19 @@
  	unsigned int val;
  
  	if (payload_len < sizeof(__le32)) {
-@@ -1427,7 +7070,26 @@
+@@ -1427,7 +7091,20 @@
  			battmgr->status.voltage_ocv = le32_to_cpu(resp->intval.value);
  			break;
  		case BATT_VOLT_NOW:
 -			battmgr->status.voltage_now = le32_to_cpu(resp->intval.value);
 +			val = le32_to_cpu(resp->intval.value);
 +			/*
-+			 * Oplus sm8650's ADSP battery service reports a non-zero
-+			 * placeholder voltage; the real cell voltage comes from the
-+			 * AP-side gauge.  Prefer the gauge whenever it is present,
-+			 * falling back to the firmware value only if it is not.
++			 * Do NOT read the AP-side gauge here: this runs in the
++			 * pmic_glink RX callback context, where the gauge's I2C
++			 * transfer is not safe (it hangs the device on plug-in).
++			 * Oplus callers use qcom_battmgr_oneplus_vbat_uv() from a
++			 * sleepable context instead.
 +			 */
-+			if (battmgr->variant == QCOM_BATTMGR_OPLUS_SM8650) {
-+				int gauge_uv =
-+					qcom_battmgr_get_batt_voltage_uv(battmgr);
-+
-+				if (gauge_uv > 0)
-+					val = gauge_uv;
-+			}
 +			battmgr->status.voltage_now = val;
 +			if (val) {
 +				WRITE_ONCE(battmgr->oneplus_pps_vbat_cache_uv, val);
@@ -5794,7 +5809,7 @@
  			break;
  		case BATT_VOLT_MAX:
  			battmgr->info.voltage_max = le32_to_cpu(resp->intval.value);
-@@ -1516,6 +7178,15 @@
+@@ -1516,6 +7193,15 @@
  		case USB_TYPE:
  			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
  			break;
@@ -5810,7 +5825,7 @@
  		default:
  			dev_warn(battmgr->dev, "unknown property %#x\n", property);
  			break;
-@@ -1556,6 +7227,36 @@
+@@ -1556,6 +7242,36 @@
  			break;
  		}
  		break;
@@ -5847,7 +5862,7 @@
  	case BATTMGR_REQUEST_NOTIFICATION:
  	case BATTMGR_CHG_CTRL_LIMIT_EN:
  		battmgr->error = 0;
-@@ -1569,14 +7270,51 @@
+@@ -1569,14 +7285,51 @@
  	complete(&battmgr->ack);
  }
  
@@ -5900,7 +5915,7 @@
  	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
  		 battmgr->variant == QCOM_BATTMGR_X1E80100)
  		qcom_battmgr_sc8280xp_callback(battmgr, data, len);
-@@ -1594,24 +7332,179 @@
+@@ -1594,24 +7347,179 @@
  	};
  	int ret;
  
@@ -6083,7 +6098,7 @@
  	{ .compatible = "qcom,glymur-pmic-glink", .data = (void *)QCOM_BATTMGR_X1E80100 },
  	{ .compatible = "qcom,kaanapali-pmic-glink", .data = (void *)QCOM_BATTMGR_SM8550 },
  	{ .compatible = "qcom,sc8180x-pmic-glink", .data = (void *)QCOM_BATTMGR_SC8280XP },
-@@ -1624,6 +7517,13 @@
+@@ -1624,6 +7532,13 @@
  
  static char *qcom_battmgr_battery[] = { "battery" };
  
@@ -6097,7 +6112,7 @@
  static int qcom_battmgr_probe(struct auxiliary_device *adev,
  			      const struct auxiliary_device_id *id)
  {
-@@ -1640,6 +7540,7 @@
+@@ -1640,6 +7555,7 @@
  		return -ENOMEM;
  
  	battmgr->dev = dev;
@@ -6105,7 +6120,7 @@
  
  	psy_cfg.drv_data = battmgr;
  	psy_cfg.fwnode = dev_fwnode(&adev->dev);
-@@ -1649,15 +7550,124 @@
+@@ -1649,15 +7565,124 @@
  	psy_cfg_supply.supplied_to = qcom_battmgr_battery;
  	psy_cfg_supply.num_supplicants = 1;
  
@@ -6230,7 +6245,7 @@
  	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
  	if (ret < 0)
  		return dev_err_probe(dev, ret,
-@@ -1690,25 +7700,34 @@
+@@ -1690,25 +7715,34 @@
  			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
  					     "failed to register wireless charing power supply\n");
  	} else {
@@ -6278,7 +6293,7 @@
  	}
  
  	ret = devm_work_autocancel(dev, &battmgr->enable_work,
-@@ -1725,9 +7744,132 @@
+@@ -1725,9 +7759,132 @@
  
  	pmic_glink_client_register(battmgr->client);
  
@@ -6411,7 +6426,7 @@
  static const struct auxiliary_device_id qcom_battmgr_id_table[] = {
  	{ .name = "pmic_glink.power-supply", },
  	{},
-@@ -1737,6 +7879,7 @@
+@@ -1737,6 +7894,7 @@
  static struct auxiliary_driver qcom_battmgr_driver = {
  	.name = "pmic_glink_power_supply",
  	.probe = qcom_battmgr_probe,
