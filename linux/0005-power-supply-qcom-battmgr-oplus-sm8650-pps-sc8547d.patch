@@ -5766,19 +5766,25 @@
  	unsigned int val;
  
  	if (payload_len < sizeof(__le32)) {
-@@ -1427,7 +7070,20 @@
+@@ -1427,7 +7070,26 @@
  			battmgr->status.voltage_ocv = le32_to_cpu(resp->intval.value);
  			break;
  		case BATT_VOLT_NOW:
 -			battmgr->status.voltage_now = le32_to_cpu(resp->intval.value);
 +			val = le32_to_cpu(resp->intval.value);
 +			/*
-+			 * Oplus sm8650's ADSP battery service can report placeholder
-+			 * data; the real cell voltage comes from the AP-side gauge.
-+			 * Fall back only when the firmware value is unusable.
++			 * Oplus sm8650's ADSP battery service reports a non-zero
++			 * placeholder voltage; the real cell voltage comes from the
++			 * AP-side gauge.  Prefer the gauge whenever it is present,
++			 * falling back to the firmware value only if it is not.
 +			 */
-+			if (!val && battmgr->variant == QCOM_BATTMGR_OPLUS_SM8650)
-+				val = qcom_battmgr_get_batt_voltage_uv(battmgr);
++			if (battmgr->variant == QCOM_BATTMGR_OPLUS_SM8650) {
++				int gauge_uv =
++					qcom_battmgr_get_batt_voltage_uv(battmgr);
++
++				if (gauge_uv > 0)
++					val = gauge_uv;
++			}
 +			battmgr->status.voltage_now = val;
 +			if (val) {
 +				WRITE_ONCE(battmgr->oneplus_pps_vbat_cache_uv, val);
@@ -5788,7 +5794,7 @@
  			break;
  		case BATT_VOLT_MAX:
  			battmgr->info.voltage_max = le32_to_cpu(resp->intval.value);
-@@ -1516,6 +7172,15 @@
+@@ -1516,6 +7178,15 @@
  		case USB_TYPE:
  			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
  			break;
@@ -5804,7 +5810,7 @@
  		default:
  			dev_warn(battmgr->dev, "unknown property %#x\n", property);
  			break;
-@@ -1556,6 +7221,36 @@
+@@ -1556,6 +7227,36 @@
  			break;
  		}
  		break;
@@ -5841,7 +5847,7 @@
  	case BATTMGR_REQUEST_NOTIFICATION:
  	case BATTMGR_CHG_CTRL_LIMIT_EN:
  		battmgr->error = 0;
-@@ -1569,14 +7264,51 @@
+@@ -1569,14 +7270,51 @@
  	complete(&battmgr->ack);
  }
  
@@ -5894,7 +5900,7 @@
  	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
  		 battmgr->variant == QCOM_BATTMGR_X1E80100)
  		qcom_battmgr_sc8280xp_callback(battmgr, data, len);
-@@ -1594,24 +7326,179 @@
+@@ -1594,24 +7332,179 @@
  	};
  	int ret;
  
@@ -5975,8 +5981,8 @@
 +
 +	schedule_delayed_work(&battmgr->oplus_keepalive_work,
 +			      msecs_to_jiffies(BATTMGR_OPLUS_KEEPALIVE_INTERVAL_MS));
- }
- 
++}
++
 +/*
 + * Read the battery voltage from the AP-side fuel gauge (BQ27Z561).
 + * Returns 0 if the gauge isn't registered yet.
@@ -6008,8 +6014,8 @@
 +	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
 +
 +	return sysfs_emit(buf, "%d\n", battmgr->otg_vbus);
-+}
-+
+ }
+ 
 +static ssize_t otg_vbus_store(struct device *dev, struct device_attribute *attr,
 +			      const char *buf, size_t count)
 +{
@@ -6077,7 +6083,7 @@
  	{ .compatible = "qcom,glymur-pmic-glink", .data = (void *)QCOM_BATTMGR_X1E80100 },
  	{ .compatible = "qcom,kaanapali-pmic-glink", .data = (void *)QCOM_BATTMGR_SM8550 },
  	{ .compatible = "qcom,sc8180x-pmic-glink", .data = (void *)QCOM_BATTMGR_SC8280XP },
-@@ -1624,6 +7511,13 @@
+@@ -1624,6 +7517,13 @@
  
  static char *qcom_battmgr_battery[] = { "battery" };
  
@@ -6091,7 +6097,7 @@
  static int qcom_battmgr_probe(struct auxiliary_device *adev,
  			      const struct auxiliary_device_id *id)
  {
-@@ -1640,6 +7534,7 @@
+@@ -1640,6 +7540,7 @@
  		return -ENOMEM;
  
  	battmgr->dev = dev;
@@ -6099,7 +6105,7 @@
  
  	psy_cfg.drv_data = battmgr;
  	psy_cfg.fwnode = dev_fwnode(&adev->dev);
-@@ -1649,15 +7544,124 @@
+@@ -1649,15 +7550,124 @@
  	psy_cfg_supply.supplied_to = qcom_battmgr_battery;
  	psy_cfg_supply.num_supplicants = 1;
  
@@ -6224,7 +6230,7 @@
  	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
  	if (ret < 0)
  		return dev_err_probe(dev, ret,
-@@ -1690,25 +7694,34 @@
+@@ -1690,25 +7700,34 @@
  			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
  					     "failed to register wireless charing power supply\n");
  	} else {
@@ -6272,7 +6278,7 @@
  	}
  
  	ret = devm_work_autocancel(dev, &battmgr->enable_work,
-@@ -1725,9 +7738,132 @@
+@@ -1725,9 +7744,132 @@
  
  	pmic_glink_client_register(battmgr->client);
  
@@ -6405,7 +6411,7 @@
  static const struct auxiliary_device_id qcom_battmgr_id_table[] = {
  	{ .name = "pmic_glink.power-supply", },
  	{},
-@@ -1737,6 +7873,7 @@
+@@ -1737,6 +7879,7 @@
  static struct auxiliary_driver qcom_battmgr_driver = {
  	.name = "pmic_glink_power_supply",
  	.probe = qcom_battmgr_probe,
