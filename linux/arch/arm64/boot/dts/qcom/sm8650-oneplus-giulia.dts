@@ -1561,11 +1561,11 @@
 		southchip,experimental-reg05 = <0x1e>; /* IBUS OCP */
 		southchip,experimental-reg0d = <0x70>; /* PMID2OUT */
 
-		southchip,experimental-vbus-min-uv = <7000000>;
+		southchip,experimental-vbus-min-uv = <6200000>;
 		southchip,experimental-vbus-max-uv = <9400000>;
-		southchip,experimental-vbat-min-uv = <3300000>;
+		southchip,experimental-vbat-min-uv = <3000000>;
 		southchip,experimental-vbat-max-uv = <4350000>;
-		southchip,experimental-pulse-vbus-min-uv = <7000000>;
+		southchip,experimental-pulse-vbus-min-uv = <6200000>;
 		southchip,experimental-start-delta-uv = <450000>;
 		southchip,experimental-start-overshoot-max-uv = <200000>;
 		southchip,experimental-start-reference-max-uv = <4350000>;
@@ -1607,11 +1607,11 @@
 		southchip,experimental-reg05 = <0x1e>;
 		southchip,experimental-reg0d = <0x70>;
 
-		southchip,experimental-vbus-min-uv = <7000000>;
+		southchip,experimental-vbus-min-uv = <6200000>;
 		southchip,experimental-vbus-max-uv = <9400000>;
-		southchip,experimental-vbat-min-uv = <3300000>;
+		southchip,experimental-vbat-min-uv = <3000000>;
 		southchip,experimental-vbat-max-uv = <4500000>;
-		southchip,experimental-pulse-vbus-min-uv = <7000000>;
+		southchip,experimental-pulse-vbus-min-uv = <6200000>;
 		southchip,experimental-start-delta-uv = <450000>;
 		southchip,experimental-start-overshoot-max-uv = <200000>;
 		southchip,experimental-start-reference-max-uv = <4350000>;
