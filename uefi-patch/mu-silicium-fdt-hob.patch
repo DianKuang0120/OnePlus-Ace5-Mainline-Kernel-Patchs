@@ -1,0 +1,197 @@
+diff --git a/Platforms/OnePlus/giuliaPkg/giulia.dsc b/Platforms/OnePlus/giuliaPkg/giulia.dsc
+index e3ce375..02fdc3c 100755
+--- a/Platforms/OnePlus/giuliaPkg/giulia.dsc
++++ b/Platforms/OnePlus/giuliaPkg/giulia.dsc
+@@ -88,6 +88,11 @@
+   ConfigurationMapLib|giuliaPkg/Library/ConfigurationMapLib/ConfigurationMapLib.inf
+ 
+ [Components]
++  #
++  # Device Tree
++  #
++  SiliciumPkg/Drivers/FdtDxe/FdtDxe.inf
++
+   #
+   # ACPI Tables
+   #
+diff --git a/Platforms/OnePlus/giuliaPkg/giulia.fdf b/Platforms/OnePlus/giuliaPkg/giulia.fdf
+index ecafdb7..5c9920f 100644
+--- a/Platforms/OnePlus/giuliaPkg/giulia.fdf
++++ b/Platforms/OnePlus/giuliaPkg/giulia.fdf
+@@ -100,12 +100,8 @@ READ_LOCK_STATUS   = TRUE
+   # IORT DT
+   INF QcomPkg/Drivers/IortDtDxe/IortDtDxe.inf
+ 
+-  # Device Tree
+-  #INF EmbeddedPkg/Drivers/DtPlatformDxe/DtPlatformDxe.inf
+-  #FILE FREEFORM = 25462CDA-221F-47DF-AC1D-259CFAA4E326 {
+-  #  SECTION RAW = giuliaPkg/FdtBlob/lanai-oneplus-giulia.dtb
+-  #  SECTION UI = "DeviceTreeBlob"
+-  #}
++  # Device Tree (installs gFdtTableGuid from the SEC FDT HOB)
++  INF SiliciumPkg/Drivers/FdtDxe/FdtDxe.inf
+ 
+   !include QcomPkg/Extra.fdf.inc
+ 
+diff --git a/Silicon/Silicium/SiliciumPkg/Drivers/FdtDxe/FdtDxe.c b/Silicon/Silicium/SiliciumPkg/Drivers/FdtDxe/FdtDxe.c
+new file mode 100644
+index 0000000..4a283a0
+--- /dev/null
++++ b/Silicon/Silicium/SiliciumPkg/Drivers/FdtDxe/FdtDxe.c
+@@ -0,0 +1,56 @@
++/** @file
++  Install the bootloader-provided device tree as the EFI gFdtTableGuid
++  configuration table, using the FDT HOB built by the SEC phase.
++
++  The device tree handed over by ABL carries the per-boot Gunyah Resource
++  Manager message-queue capability IDs; without forwarding it to the OS the
++  mainline Gunyah driver cannot talk to the RM.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Uefi.h>
++#include <Library/BaseLib.h>
++#include <Library/DebugLib.h>
++#include <Library/HobLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiDriverEntryPoint.h>
++
++#include <Guid/Fdt.h>
++#include <Guid/FdtHob.h>
++
++EFI_STATUS
++EFIAPI
++FdtDxeInitialize (
++  IN EFI_HANDLE        ImageHandle,
++  IN EFI_SYSTEM_TABLE  *SystemTable
++  )
++{
++  VOID        *Hob;
++  VOID        *Fdt;
++  UINT8       *Magic;
++  EFI_STATUS  Status;
++
++  Hob = GetFirstGuidHob (&gFdtHobGuid);
++  if ((Hob == NULL) || (GET_GUID_HOB_DATA_SIZE (Hob) != sizeof (UINT64))) {
++    DEBUG ((DEBUG_WARN, "FdtDxe: no FDT HOB found\n"));
++    return EFI_NOT_FOUND;
++  }
++
++  Fdt   = (VOID *)(UINTN)*(UINT64 *)GET_GUID_HOB_DATA (Hob);
++  Magic = (UINT8 *)Fdt;
++
++  //
++  // Flat device tree magic 0xd00dfeed, stored big-endian.
++  //
++  if ((Fdt == NULL) ||
++      (Magic[0] != 0xD0) || (Magic[1] != 0x0D) ||
++      (Magic[2] != 0xFE) || (Magic[3] != 0xED)) {
++    DEBUG ((DEBUG_ERROR, "FdtDxe: invalid device tree @ 0x%p\n", Fdt));
++    return EFI_NOT_FOUND;
++  }
++
++  Status = gBS->InstallConfigurationTable (&gFdtTableGuid, Fdt);
++  DEBUG ((DEBUG_INFO, "FdtDxe: gFdtTableGuid @ 0x%p (%r)\n", Fdt, Status));
++  return Status;
++}
+diff --git a/Silicon/Silicium/SiliciumPkg/Drivers/FdtDxe/FdtDxe.inf b/Silicon/Silicium/SiliciumPkg/Drivers/FdtDxe/FdtDxe.inf
+new file mode 100644
+index 0000000..86a9825
+--- /dev/null
++++ b/Silicon/Silicium/SiliciumPkg/Drivers/FdtDxe/FdtDxe.inf
+@@ -0,0 +1,33 @@
++## @file
++#  Install the bootloader device tree as gFdtTableGuid.
++#
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++##
++
++[Defines]
++  INF_VERSION                    = 0x00010005
++  BASE_NAME                      = FdtDxe
++  FILE_GUID                      = 7E1A2C3B-4D5E-4F60-9A1B-2C3D4E5F6071
++  MODULE_TYPE                    = DXE_DRIVER
++  VERSION_STRING                 = 1.0
++  ENTRY_POINT                    = FdtDxeInitialize
++
++[Sources]
++  FdtDxe.c
++
++[Packages]
++  MdePkg/MdePkg.dec
++
++[LibraryClasses]
++  BaseLib
++  DebugLib
++  HobLib
++  UefiBootServicesTableLib
++  UefiDriverEntryPoint
++
++[Guids]
++  gFdtHobGuid
++  gFdtTableGuid
++
++[Depex]
++  TRUE
+diff --git a/Silicon/Silicium/SiliciumPkg/Sec/AArch64/ModuleEntryPoint.S b/Silicon/Silicium/SiliciumPkg/Sec/AArch64/ModuleEntryPoint.S
+index 0c05ffa..5c7f0fc 100644
+--- a/Silicon/Silicium/SiliciumPkg/Sec/AArch64/ModuleEntryPoint.S
++++ b/Silicon/Silicium/SiliciumPkg/Sec/AArch64/ModuleEntryPoint.S
+@@ -13,6 +13,11 @@
+ .set CTRL_SPAN_BIT, BIT23
+ 
+ ASM_FUNC (_ModuleEntryPoint)
++  // Save the device-tree pointer handed over by the bootloader (ABL) in x0
++  // before anything clobbers it; SecMain() publishes it as an FDT HOB.
++  ldr   x9, =ASM_PFX (mDeviceTreeBase)
++  str   x0, [x9]
++
+   // Do Platform Specific Initialization
+   bl    ASM_PFX (PlatformAssemblyInitialize)
+ 
+diff --git a/Silicon/Silicium/SiliciumPkg/Sec/Sec.c b/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
+index 8d586b3..7f286ea 100644
+--- a/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
++++ b/Silicon/Silicium/SiliciumPkg/Sec/Sec.c
+@@ -16,8 +16,14 @@
+ #include <Library/TimerLib.h>
+ #include <Library/HobLib.h>
+ 
++#include <Guid/FdtHob.h>
++
+ #include "Sec.h"
+ 
++// Device tree pointer passed by the bootloader (ABL) in x0.  Written from
++// ModuleEntryPoint.S before the C runtime starts, hence non-static.
++UINTN  mDeviceTreeBase = 0;
++
+ #ifndef MDEPKG_NDEBUG
+ STATIC
+ VOID
+@@ -118,6 +124,13 @@ SecMain (VOID)
+     return;
+   }
+ 
++  // Publish the bootloader-provided device tree (carries the per-boot Gunyah
++  // Resource Manager capids injected by ABL) as an FDT HOB so FdtDxe can turn
++  // it into the EFI gFdtTableGuid configuration table.
++  if (mDeviceTreeBase != 0) {
++    BuildGuidDataHob (&gFdtHobGuid, &mDeviceTreeBase, sizeof (mDeviceTreeBase));
++  }
++
+   // Build CPU HOB
+   BuildCpuHob (ArmGetPhysicalAddressBits (), PcdGet8 (PcdPrePiCpuIoSize));
+ 
+diff --git a/Silicon/Silicium/SiliciumPkg/Sec/Sec.inf b/Silicon/Silicium/SiliciumPkg/Sec/Sec.inf
+index 79afd19..f17ded8 100644
+--- a/Silicon/Silicium/SiliciumPkg/Sec/Sec.inf
++++ b/Silicon/Silicium/SiliciumPkg/Sec/Sec.inf
+@@ -52,6 +52,7 @@
+ 
+ [Guids]
+   gArmMpCoreInfoGuid
++  gFdtHobGuid
+ 
+ [Pcd]
+   gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString
