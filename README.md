@@ -27,7 +27,7 @@
 | Bluetooth            | Uses controller default MAC | ✅    |
 | GPS                  |                         | ❌    |
 | Speakers             | Off-tree                | ✅    |
-| Microphones          | Bottom MIC for now      | ⚠️    |
+| Microphones          | WCD9395 analog mics: bottom(main)+top(sec) stereo, headset (UCM) | ✅    |
 | GPU                  |                         | ✅    |
 | Camera               | CAMSS up, sensor drivers missing | ❌ |
 | Flash                | pm8350c flash-led       | ✅    |
