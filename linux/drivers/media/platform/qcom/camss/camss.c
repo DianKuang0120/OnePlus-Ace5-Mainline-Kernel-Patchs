@@ -3353,8 +3353,14 @@ static const struct camss_subdev_resources csiphy_res_sm8650[] = {
 			{ .supply = "vdd-csiphy01-1p2", .init_load_uA = 17800 },
 		},
 		.clock = { "csiphy1", "csiphy1_timer" },
-		.clock_rate = { { 400000000 },
-				{ 400000000 } },
+		/*
+		 * The vendor DT allows the shared cphy_rx_clk_src to run at
+		 * 400 MHz (lowsvs) or 480 MHz (nominal); C-PHY links need the
+		 * higher rate, and csiphy_set_clock_rates() picks the smallest
+		 * rate above link_freq / 4, so list them all.
+		 */
+		.clock_rate = { { 400000000, 480000000, 560000000, 640000000 },
+				{ 400000000, 480000000, 560000000, 640000000 } },
 		.reg = { "csiphy1" },
 		.interrupt = { "csiphy1" },
 		.csiphy = {
