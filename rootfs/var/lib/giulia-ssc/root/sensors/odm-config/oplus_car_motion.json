@@ -1,0 +1,15 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Dragon", "Surf", "QRD", "HDK", "IDP", "IOT", "RCM"],
+    "soc_id": ["519", "557", "536", "577"]
+  },
+  "car_motion":{
+    "owner": "sns_car_motion",
+    ".config":{
+      "owner": "sns_car_motion",
+      "available":{ "type": "int", "ver": "0",
+        "data": "1"
+      }
+    }
+  }
+}

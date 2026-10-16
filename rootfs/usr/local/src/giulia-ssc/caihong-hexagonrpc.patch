@@ -1,0 +1,34 @@
+diff --git a/hexagonrpcd/rpcd_builder.c b/hexagonrpcd/rpcd_builder.c
+--- a/hexagonrpcd/rpcd_builder.c
++++ b/hexagonrpcd/rpcd_builder.c
+@@ -31,0 +32 @@
++#define SENSORS_ODM_CONFIG	"/sensors/odm-config/"
+@@ -167 +168,2 @@
+-	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
++	char *acdbdata, *dsp_libs, *sns_cfg, *sns_odm_cfg, *sns_reg;
++	char *sns_reg_config, *socinfo;
+@@ -174,0 +177 @@
++	sns_odm_cfg = malloc(n_prefix + strlen(SENSORS_ODM_CONFIG) + 1);
+@@ -189,0 +193,5 @@
++
++	if (sns_odm_cfg != NULL) {
++		strcpy(sns_odm_cfg, prefix);
++		strcat(sns_odm_cfg, SENSORS_ODM_CONFIG);
++	}
+@@ -232 +240 @@
+-	return hfs_mkdir("/", 6,
++	return hfs_mkdir("/", 7,
+@@ -238,0 +247,7 @@
++			hfs_mkdir("odm", 1,
++				hfs_mkdir("etc", 1,
++					hfs_mkdir("sensor", 1,
++					hfs_map_or_empty("config", sns_odm_cfg)
++					)
++				)
++			),
+diff --git a/tools/sscregistrygen.c b/tools/sscregistrygen.c
+--- a/tools/sscregistrygen.c
++++ b/tools/sscregistrygen.c
+@@ -150 +150 @@
+-	fd = openat(dirfd, name, O_WRONLY | O_CREAT,
++	fd = openat(dirfd, name, O_WRONLY | O_CREAT | O_TRUNC,

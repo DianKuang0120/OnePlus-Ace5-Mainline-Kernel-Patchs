@@ -1,0 +1,15 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Dragon", "Surf", "QRD", "HDK", "IDP", "IOT", "RCM"],
+    "soc_id": ["519", "557", "536", "577"]
+  },
+  "oplus_rotation_commom":{
+    "owner": "oplus_rotation",
+    ".config":{
+      "owner": "oplus_rotation",
+      "is_available":{ "type": "int", "ver": "0",
+        "data": "1"
+      }
+    }
+  }
+}

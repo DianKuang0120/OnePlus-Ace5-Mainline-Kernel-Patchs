@@ -1,0 +1,8 @@
+# Enable the giulia SSC sensors exposed through the ADSP FastRPC node.
+# ACCEL_MOUNT_MATRIX: identity.  Verified on device (2026-10-16): the SSC
+# accelerometer already reports in the standard device frame, i.e. flat
+# screen-up -> (0,0,+9.8) and portrait top-up -> (0,+9.8,0).  No swap/negate.
+# ssc-proximity is included because giulia's tcs3720 publishes proximity
+# (unlike caihong); gyroscope has no iio-sensor-proxy backend, read it via
+# the libssc API instead.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp*", ENV{IIO_SENSOR_PROXY_TYPE}="ssc-accel ssc-proximity ssc-light ssc-compass", ENV{ACCEL_LOCATION}="display", ENV{ACCEL_MOUNT_MATRIX}="1, 0, 0; 0, 1, 0; 0, 0, 1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"

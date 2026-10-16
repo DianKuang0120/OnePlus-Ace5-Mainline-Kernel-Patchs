@@ -1,0 +1,1 @@
+{"cct_rear_platform.boot_cfg":{"owner":"cct_rear","publish_sns":{"type":"int","ver":"0","data":"0x7"},"device_id":{"type":"int","ver":"0","data":"0x1"},"timer_size":{"type":"int","ver":"0","data":"25"},"fac_cali_sns":{"type":"int","ver":"0","data":"0x2"},"para_matrix_index":{"type":"int","ver":"0","data":"2"},"camera_fast_flicker":{"type":"int","ver":"0","data":"1"}}}

@@ -1,0 +1,27 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Dragon", "Surf", "QRD", "HDK", "IDP", "IOT", "RCM"],
+    "soc_id": ["519", "557", "536", "577"]
+  },
+  "oplus_lay_commom":{
+    "owner": "oplus_lay",
+    ".config":{
+      "owner": "oplus_lay",
+      "is_available":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "max_angel":{ "type": "flt", "ver": "0",
+        "data": "90"
+      },
+      "min_angel":{ "type": "flt", "ver": "0",
+        "data": "30"
+      },
+      "lay_in_time":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "lay_out_time":{ "type": "int", "ver": "0",
+        "data": "3"
+      }
+    }
+  }
+}

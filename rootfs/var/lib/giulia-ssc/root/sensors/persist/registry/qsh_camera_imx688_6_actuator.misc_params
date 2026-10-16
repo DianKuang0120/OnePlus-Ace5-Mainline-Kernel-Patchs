@@ -1,0 +1,1 @@
+{"qsh_camera_imx688_6_actuator.misc_params":{"owner":"qsh_camera_imx688_6_actuator","settling_time_ms":{"type":"int","ver":"0","data":"40"},"num_actuator_steps":{"type":"int","ver":"0","data":"6"}}}

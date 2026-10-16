@@ -1,0 +1,301 @@
+{
+  "config":
+  {
+    "hw_platform": ["MTP", "Dragon", "Surf", "QRD", "HDK", "IDP", "IOT", "RCM"],
+    "soc_id": ["519", "557", "536", "577"]
+  },
+  "alsps_hw_tcs3720":{
+    "owner": "sns_alsps",
+    ".key_config":{
+      "owner": "sns_alsps",
+      "is_als_dri":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "is_ps_dri":{ "type": "int", "ver": "0",
+        "data": "0"
+      },
+      "als_lb_algo":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "ps_hw_cali":{ "type": "int", "ver": "0",
+        "data": "0"
+      },
+      "ps_ir_algo":{ "type": "int", "ver": "0",
+        "data": "0"
+      },
+      "ps_dual_power":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "ps_far_gesture":{ "type": "int", "ver": "0",
+        "data": "0"
+      },
+      "als_row_coe":{ "type": "int", "ver": "0",
+        "data": "110"
+      },
+      "als_ud_buf_len":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "als_timer_ms":{ "type": "int", "ver": "0",
+        "data": "20"
+      },
+      "ps_timer_ms":{ "type": "int", "ver": "0",
+        "data": "80"
+      },
+      "pwm_freq":{"type": "int", "ver": "0",
+        "data": "360"
+      },
+      "ir_ratio":{"type": "int", "ver": "0",
+        "data": "10"
+      },
+      "lux_offset":{"type": "int", "ver": "0",
+        "data": "0"
+      },
+      "lux_cut":{"type": "int", "ver": "0",
+        "data": "0"
+      },
+      "ps_near_check_num":{"type": "int", "ver": "0",
+        "data": "2"
+      },
+      "ps_far_check_num":{"type": "int", "ver": "0",
+        "data": "1"
+      },
+      "c_ir_zero":{"type": "int", "ver": "0",
+        "data": "2000"
+      },
+      "auto_gain_timer_ms":{"type": "int", "ver": "0",
+        "data": "0"
+      },
+      "algo_para_num":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "brl_thrd_num":{ "type": "int", "ver": "0",
+        "data": "3"
+      },
+      "dmc_flt_thr":{ "type": "int", "ver": "0",
+        "data": "100"
+      },
+      "als_algo_ver":{ "type": "int", "ver": "0",
+        "data": "2"
+      },
+      "need_gain_cali":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "gain_max_limit":{ "type": "int", "ver": "0",
+        "data": "512"
+      }
+    },
+    ".hw_cfg":{
+      "owner": "sns_alsps",
+      "debug_mode":{ "type": "int", "ver": "0",
+        "data": "1"
+      },
+      "always_lb":{ "type": "int", "ver": "0",
+        "data": "0"
+      },
+      "use_asp1":{ "type": "int", "ver": "0",
+        "data": "0"
+      },
+      "h_ir_ratio":{ "type": "int", "ver": "0",
+        "data": "1000000"
+      },
+      "freq_golden":{ "type": "int", "ver": "0",
+        "data": "9950"
+      },
+      "is_double_integ":{"type": "int", "ver": "0",
+        "data": "0"
+      },
+      "d_integ_level_1":{"type": "int", "ver": "0",
+        "data": "1085"
+      },
+      "d_integ_level_2":{"type": "int", "ver": "0",
+        "data": "1223"
+      },
+      "d_integ_async":{"type": "int", "ver": "0",
+        "data": "50"
+      },
+      "lux_bri_level":{"type": "int", "ver": "0",
+        "data": "1223"
+      },
+      "use_med_fil":{"type": "int", "ver": "0",
+        "data": "0"
+      }
+    },
+    ".reg":{
+      "owner": "sns_alsps",
+      "reg0":{ "type": "int", "ver": "0",
+        "data": "0x82E2"
+      },
+      "reg1":{ "type": "int", "ver": "0",
+        "data": "0xD9B0"
+      },
+      "reg2":{ "type": "int", "ver": "0",
+        "data": "0xB10C"
+      }
+    },
+    ".dynamic_cali":{
+      "owner": "sns_alsps",
+      ".dt":{
+        "owner": "sns_alsps",
+        "anti_shake_delta":{ "type": "int", "ver": "0",
+          "data": "150"
+        },
+        "low_step":{ "type": "int", "ver": "0",
+          "data": "300"
+        },
+        "high_step":{ "type": "int", "ver": "0",
+          "data": "400"
+        },
+        "low_limit":{ "type": "int", "ver": "0",
+          "data": "400"
+        },
+        "high_limit":{ "type": "int", "ver": "0",
+          "data": "550"
+        },
+        "dirty_low_step":{ "type": "int", "ver": "0",
+          "data": "200"
+        },
+        "dirty_high_step":{ "type": "int", "ver": "0",
+          "data": "300"
+        },
+        "ps_dirty_limit":{ "type": "int", "ver": "0",
+          "data": "1800"
+        },
+        "ps_ir_limit":{ "type": "int", "ver": "0",
+          "data": "500"
+        },
+        "ps_adjust_min":{ "type": "int", "ver": "0",
+          "data": "0"
+        },
+        "ps_adjust_max":{ "type": "int", "ver": "0",
+          "data": "850"
+        },
+        "sampling_count":{ "type": "int", "ver": "0",
+          "data": "5"
+        },
+        "step_max":{ "type": "int", "ver": "0",
+          "data": "400"
+        },
+        "step_min":{ "type": "int", "ver": "0",
+          "data": "200"
+        },
+        "step_div":{ "type": "int", "ver": "0",
+          "data": "1500"
+        }
+      },
+      ".dc":{
+        "owner": "sns_alsps",
+        "cal_offset_margin":{ "type": "int", "ver": "0",
+          "data": "3001"
+        },
+        "dynamic_cali_max":{ "type": "int", "ver": "0",
+          "data": "5000"
+        },
+        "cali_over_zore_cnt":{ "type": "int", "ver": "0",
+          "data": "10"
+        },
+        "cali_jitter_limit":{ "type": "int", "ver": "0",
+          "data": "85"
+        },
+        "offset_max":{ "type": "int", "ver": "0",
+          "data": "16000"
+        },
+        "force_cali_limit":{ "type": "int", "ver": "0",
+          "data": "0"
+        },
+        "boot_cali_delta":{ "type": "int", "ver": "0",
+          "data": "85"
+        }
+      }
+    },
+    ".algo_para_0":{
+      "owner": "sns_alsps",
+      "gold_ch":{ "type": "str", "ver": "0",
+        "data": "13998, 6086, 2860, 21800, 9097, 6609, 3615, 18685"
+      },
+      "sync_delay_us":{ "type": "str", "ver": "0",
+        "data": "300, 350, 300, 795, 795, 795"
+      },
+      "lb_brl_thrd":{ "type": "str", "ver": "0",
+        "data": "948, 1143, 3515"
+      },
+      "duty_cycle":{ "type": "str", "ver": "0",
+        "data": "50, 50, 50, 50"
+      },
+      "asp_mode":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0, 0"
+      },
+      "double_integ":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0, 0"
+      },
+      "integ_sync_us":{ "type": "str", "ver": "0",
+        "data": "50, 50, 50, 50"
+      },
+      "lux_coef_SuperHir":{ "type": "str", "ver": "0",
+        "data": "0.00132400653735478, 0.002209884205, 0.002935624780, 0.006645826244"
+      },
+      "power_config":{ "type": "str", "ver": "0",
+        "data": "0, 98, 119, 68, 0, 98, 119, 68, 0, 98, 119, 68, 192, 253, 123, 70"
+      },
+      "matrix_1_lux_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0, 0.012072579938"
+      },
+      "matrix_1_lux_coef_Lir":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0, 0.012072579938"
+      },
+      "matrix_1_cct_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "-0.005249072360, 0.054324543202, -0.042360906421, 0.003664410541, -0.010050300225, 0.055803502516, -0.041587532893, 0.006094215397, -0.033343377157, 0.005815591221, 0.035392698866, 0.016906296513"
+      },
+      "matrix_1_cct_coef_Lir":{ "type": "str", "ver": "0",
+        "data": "-0.015266889519, -0.010758921602, -0.026650146219, 0.029169947409, -0.015062099048, 0.008373185774, -0.027998458125, 0.022531256695, -0.067129799928, -0.084480877842, 0.053750418534, 0.065583773152"
+      },
+      "matrix_1_black_frame_k":{"type": "str", "ver": "0",
+        "data": "0, 0, 0, 0"
+      },
+      "matrix_2_lux_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0, 0.012072579938"
+      },
+      "matrix_2_lux_coef_Lir":{ "type": "str", "ver": "0",
+         "data": "0, 0, 0, 0.012072579938"
+      },
+      "matrix_2_cct_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "-0.005249072360, 0.054324543202, -0.042360906421, 0.003664410541, -0.010050300225, 0.055803502516, -0.041587532893, 0.006094215397, -0.033343377157, 0.005815591221, 0.035392698866, 0.016906296513"
+      },
+      "matrix_2_cct_coef_Lir":{ "type": "str", "ver": "0",
+        "data": "-0.015266889519, -0.010758921602, -0.026650146219, 0.029169947409, -0.015062099048, 0.008373185774, -0.027998458125, 0.022531256695, -0.067129799928, -0.084480877842, 0.053750418534, 0.065583773152"
+      },
+      "matrix_2_black_frame_k":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0, 0"
+      },
+      "matrix_3_lux_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "-0.010050300225, 0.055803502516, -0.041587532893, 0.006094215397"
+      },
+      "matrix_3_lux_coef_Lir":{ "type": "str", "ver": "0",
+         "data": "-0.015062099048, 0.008373185774, -0.027998458125, 0.022531256695"
+      },
+      "matrix_3_cct_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "-0.005249072360, 0.054324543202, -0.042360906421, 0.003664410541, -0.010050300225, 0.055803502516, -0.041587532893, 0.006094215397, -0.033343377157, 0.005815591221, 0.035392698866, 0.016906296513"
+      },
+      "matrix_3_cct_coef_Lir":{ "type": "str", "ver": "0",
+        "data": "-0.015266889519, -0.010758921602, -0.026650146219, 0.029169947409, -0.015062099048, 0.008373185774, -0.027998458125, 0.022531256695, -0.067129799928, -0.084480877842, 0.053750418534, 0.065583773152"
+      },
+      "matrix_3_double_integ_k":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0"
+      },
+      "matrix_4_lux_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "-0.010050300225, 0.055803502516, -0.041587532893, 0.006094215397"
+      },
+      "matrix_4_lux_coef_Lir":{ "type": "str", "ver": "0",
+         "data": "-0.015062099048, 0.008373185774, -0.027998458125, 0.022531256695"
+      },
+      "matrix_4_cct_coef_Hir":{ "type": "str", "ver": "0",
+        "data": "-0.005249072360, 0.054324543202, -0.042360906421, 0.003664410541, -0.010050300225, 0.055803502516, -0.041587532893, 0.006094215397, -0.033343377157, 0.005815591221, 0.035392698866, 0.016906296513"
+      },
+      "matrix_4_cct_coef_Lir":{ "type": "str", "ver": "0",
+        "data": "-0.015266889519, -0.010758921602, -0.026650146219, 0.029169947409, -0.015062099048, 0.008373185774, -0.027998458125, 0.022531256695, -0.067129799928, -0.084480877842, 0.053750418534, 0.065583773152"
+      },
+      "matrix_4_double_integ_k":{ "type": "str", "ver": "0",
+        "data": "0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0"
+      }
+    }
+  }
+}

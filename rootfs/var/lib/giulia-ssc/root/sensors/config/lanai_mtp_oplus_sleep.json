@@ -1,0 +1,135 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Dragon", "Surf", "QRD", "HDK", "IDP", "IOT", "RCM"],
+    "soc_id": ["519", "557", "536", "577"]
+  },
+  "oplus_sleep_commom":{
+    "owner": "oplus_sleep",
+    ".config":{
+      "owner": "oplus_sleep",
+      "is_available":{ "type": "int", "ver": "0",
+        "data": "0x3"
+      },
+      "cfg_0":{ "type": "int", "ver": "0",
+        "data": "6"
+      },
+      "cfg_1":{ "type": "int", "ver": "0",
+        "data": "7"
+      },
+      "cfg_2":{ "type": "int", "ver": "0",
+        "data": "8"
+      },
+      "cfg_3":{ "type": "int", "ver": "0",
+        "data": "8"
+      },
+      "cfg_4":{ "type": "int", "ver": "0",
+        "data": "8"
+      },
+      "cfg_5":{ "type": "int", "ver": "0",
+        "data": "8"
+      },
+      "cfg_6":{ "type": "int", "ver": "0",
+        "data": "8"
+      },
+      "cfg_7":{ "type": "int", "ver": "0",
+        "data": "8"
+      },
+      "cfg_8":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_9":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_10":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_11":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_12":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_13":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_14":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_15":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_16":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_17":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_18":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_19":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_20":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_21":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_22":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_23":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_24":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_25":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_26":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_27":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_28":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_29":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_30":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_31":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_32":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_33":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_34":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_35":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_36":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_37":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_38":{ "type": "int", "ver": "0",
+        "data": "10"
+      },
+      "cfg_39":{ "type": "int", "ver": "0",
+        "data": "11"
+      }
+    }
+  }
+}

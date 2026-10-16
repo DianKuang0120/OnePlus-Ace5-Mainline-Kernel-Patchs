@@ -1,0 +1,1 @@
+{"sns_dynamic_libraries.libchre":{"owner":"dynamic_sensor","name":{"type":"str","ver":"0","data":"chre_qsh_shim.so"},"reg_fun":{"type":"str","ver":"0","data":"chre_qsh_shim_register"},"reg_cnt":{"type":"int","ver":"0","data":"1"}}}
