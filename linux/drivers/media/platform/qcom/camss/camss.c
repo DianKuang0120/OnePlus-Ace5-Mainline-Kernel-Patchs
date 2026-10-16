@@ -3359,8 +3359,8 @@ static const struct camss_subdev_resources csiphy_res_sm8650[] = {
 		 * higher rate, and csiphy_set_clock_rates() picks the smallest
 		 * rate above link_freq / 4, so list them all.
 		 */
-		.clock_rate = { { 400000000, 480000000, 560000000, 640000000 },
-				{ 400000000, 480000000, 560000000, 640000000 } },
+		.clock_rate = { { 400000000, 480000000, 560000000, 640000000, 800000000 },
+				{ 400000000, 480000000, 560000000, 640000000, 800000000 } },
 		.reg = { "csiphy1" },
 		.interrupt = { "csiphy1" },
 		.csiphy = {
