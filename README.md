@@ -24,7 +24,7 @@
 | CPU                  |                         | ✅    |
 | Gunyah               |                         | ✅    |
 | Touchscreen          | Off-tree                | ✅    |
-| Bluetooth            | Factory MAC (DT local-bd-address) | ✅    |
+| Bluetooth            | Uses controller default MAC | ✅    |
 | GPS                  |                         | ❌    |
 | Speakers             | Off-tree                | ✅    |
 | Microphones          | Bottom MIC for now      | ⚠️    |

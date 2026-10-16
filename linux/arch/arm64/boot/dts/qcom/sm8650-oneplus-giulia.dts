@@ -1456,13 +1456,6 @@
 	bluetooth {
 		compatible = "qcom,wcn7850-bt";
 
-		/*
-		 * Factory Bluetooth address of this unit (from the stock firmware;
-		 * the mainline btqca path otherwise falls back to the controller
-		 * default).  Little-endian, so AC:45:CA:47:C8:02 -> [02 c8 47 ca 45 ac].
-		 */
-		local-bd-address = [02 c8 47 ca 45 ac];
-
 		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
 		vddaon-supply = <&vreg_pmu_aon_0p59>;
 		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
