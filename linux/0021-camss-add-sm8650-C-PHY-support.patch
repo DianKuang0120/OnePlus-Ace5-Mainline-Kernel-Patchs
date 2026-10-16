@@ -81,11 +81,10 @@
  
  /* 4nm 2PH v 2.1.2 2p5Gbps 4 lane DPHY mode */
  static const struct
-@@ -1091,6 +1165,16 @@
- 	const struct csiphy_lane_regs *r = csiphy->regs->lane_regs;
+@@ -1092,6 +1166,16 @@
  	int i, array_size = csiphy->regs->lane_array_size;
  	u32 val;
-+
+ 
 +	/*
 +	 * The sm8650 PHY is wired for C-PHY on some boards (e.g. the OnePlus
 +	 * Ace 5 / 13R main sensor); its lane setup is a different register set.
@@ -95,9 +94,33 @@
 +		r = lane_regs_sm8650_cphy;
 +		array_size = ARRAY_SIZE(lane_regs_sm8650_cphy);
 +	}
- 
++
  	for (i = 0; i < array_size; i++, r++) {
  		switch (r->csiphy_param_type) {
+ 		case CSIPHY_SETTLE_CNT_LOWER_BYTE:
+@@ -1161,9 +1245,19 @@
+ 
+ 	settle_cnt = csiphy_settle_cnt_calc(link_freq, csiphy->timer_clk_rate);
+ 
+-	val = CSIPHY_3PH_CMN_CSI_COMMON_CTRL5_CLK_ENABLE;
+-	for (i = 0; i < c->num_data; i++)
+-		val |= BIT(c->data[i].pos * 2);
++	if (csiphy->cfg.csi2->is_cphy) {
++		/*
++		 * C-PHY has no separate clock lane and uses a different lane
++		 * enable encoding (the OPLUS tables write 0x2a for 3 trios).
++		 */
++		val = 0;
++		for (i = 0; i < c->num_data; i++)
++			val |= BIT(c->data[i].pos * 2 + 1);
++	} else {
++		val = CSIPHY_3PH_CMN_CSI_COMMON_CTRL5_CLK_ENABLE;
++		for (i = 0; i < c->num_data; i++)
++			val |= BIT(c->data[i].pos * 2);
++	}
+ 
+ 	writel_relaxed(val, csiphy->base +
+ 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 5));
 --- a/drivers/media/platform/qcom/camss/camss-csiphy.h
 +++ b/drivers/media/platform/qcom/camss/camss-csiphy.h
 @@ -42,6 +42,8 @@
