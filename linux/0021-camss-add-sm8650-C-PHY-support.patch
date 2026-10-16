@@ -1,0 +1,134 @@
+--- a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+@@ -804,6 +804,80 @@
+ 	{0x0c10, 0x52, 0x00, CSIPHY_DEFAULT_PARAMS},
+ };
+ 
++/* 5nm 2PH v 2.2.0 C-PHY (3 trios) lane registers, from the OPLUS cam_csiphy tables */
++static const struct
++csiphy_lane_regs lane_regs_sm8650_cphy[] = {
++	{0x02F4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02F8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02FC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02F0, 0xEF, 0xd3, CSIPHY_DEFAULT_PARAMS},
++	{0x06F4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06F8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06FC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06F0, 0xEF, 0xd3, CSIPHY_DEFAULT_PARAMS},
++	{0x0AF4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0AF8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0AFC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0AF0, 0xEF, 0xd3, CSIPHY_DEFAULT_PARAMS},
++	{0x0204, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02E4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02E8, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02EC, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0218, 0x3E, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x021C, 0x41, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0220, 0x41, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0224, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0228, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x022C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0264, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0244, 0xB2, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0310, 0x35, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x02BC, 0xD0, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0254, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0240, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0260, 0xA8, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0284, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0290, 0x02, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0604, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06E4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06E8, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06EC, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0618, 0x3E, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x061C, 0x41, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0620, 0x41, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0624, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0628, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x062C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0664, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0644, 0xB2, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0710, 0x35, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x06BC, 0xD0, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0654, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0640, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0660, 0xA8, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0684, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0690, 0x02, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A04, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0AE4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0AE8, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0AEC, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A18, 0x3E, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A1C, 0x41, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A20, 0x41, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A24, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A28, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A2C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A64, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A44, 0xB2, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0B10, 0x35, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0ABC, 0xD0, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A54, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A40, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A60, 0xA8, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A84, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
++	{0x0A90, 0x02, 0x00, CSIPHY_DEFAULT_PARAMS},
++};
++
+ 
+ /* 4nm 2PH v 2.1.2 2p5Gbps 4 lane DPHY mode */
+ static const struct
+@@ -1091,6 +1165,16 @@
+ 	const struct csiphy_lane_regs *r = csiphy->regs->lane_regs;
+ 	int i, array_size = csiphy->regs->lane_array_size;
+ 	u32 val;
++
++	/*
++	 * The sm8650 PHY is wired for C-PHY on some boards (e.g. the OnePlus
++	 * Ace 5 / 13R main sensor); its lane setup is a different register set.
++	 */
++	if (csiphy->camss->res->version == CAMSS_8650 && csiphy->cfg.csi2 &&
++	    csiphy->cfg.csi2->is_cphy) {
++		r = lane_regs_sm8650_cphy;
++		array_size = ARRAY_SIZE(lane_regs_sm8650_cphy);
++	}
+ 
+ 	for (i = 0; i < array_size; i++, r++) {
+ 		switch (r->csiphy_param_type) {
+--- a/drivers/media/platform/qcom/camss/camss-csiphy.h
++++ b/drivers/media/platform/qcom/camss/camss-csiphy.h
+@@ -42,6 +42,8 @@
+ 
+ struct csiphy_csi2_cfg {
+ 	struct csiphy_lanes_cfg lane_cfg;
++	/* link is C-PHY (3 trios) instead of D-PHY */
++	bool is_cphy;
+ };
+ 
+ struct csiphy_config {
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -4755,15 +4755,17 @@
+ 		return ret;
+ 
+ 	/*
+-	 * Most SoCs support both D-PHY and C-PHY standards, but currently only
+-	 * D-PHY is supported in the driver.
++	 * D-PHY and C-PHY are both accepted; the PHY driver picks the matching
++	 * lane register set (C-PHY is only implemented for the sm8650 PHY).
+ 	 */
+-	if (vep.bus_type != V4L2_MBUS_CSI2_DPHY) {
++	if (vep.bus_type != V4L2_MBUS_CSI2_DPHY &&
++	    vep.bus_type != V4L2_MBUS_CSI2_CPHY) {
+ 		dev_err(dev, "Unsupported bus type %d\n", vep.bus_type);
+ 		return -EINVAL;
+ 	}
+ 
+ 	csd->interface.csiphy_id = vep.base.port;
++	csd->interface.csi2.is_cphy = (vep.bus_type == V4L2_MBUS_CSI2_CPHY);
+ 
+ 	mipi_csi2 = &vep.bus.mipi_csi2;
+ 	lncfg->clk.pos = mipi_csi2->clock_lane;

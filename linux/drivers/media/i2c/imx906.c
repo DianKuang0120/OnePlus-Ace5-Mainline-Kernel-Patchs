@@ -48,7 +48,7 @@
 #define IMX906_MODE_FLL_DEF	0x0d00
 #define IMX906_MODE_FLL_MIN	0x0d00
 #define IMX906_MODE_LLP		0x0d00
-#define IMX906_LINK_FREQ_DEF	934000000
+#define IMX906_LINK_FREQ_DEF	2490000000
 #define IMX906_NUM_DATA_LANES	4
 
 #define IMX906_EXPOSURE_DEF	0x0400
@@ -163,6 +163,17 @@ static int imx906_read_reg16(struct imx906 *s, u16 reg, u16 *val)
 	return 0;
 }
 
+static int imx906_read_reg8(struct imx906 *s, u16 reg, u8 *val)
+{
+	u8 addr[2] = { reg >> 8, reg & 0xff };
+	struct i2c_msg msgs[2] = {
+		{ .addr = s->client->addr, .flags = 0, .len = 2, .buf = addr },
+		{ .addr = s->client->addr, .flags = I2C_M_RD, .len = 1, .buf = val },
+	};
+
+	return i2c_transfer(s->client->adapter, msgs, 2) == 2 ? 0 : -EIO;
+}
+
 /* ---- power ---- */
 
 static int imx906_power_on(struct imx906 *s)
@@ -223,6 +234,18 @@ static int imx906_set_stream(struct v4l2_subdev *sd, int enable)
 					 ARRAY_SIZE(imx906_init_regs));
 		if (ret)
 			goto err;
+
+		/* The PHY mode / lane count the part actually ended up in. */
+		{
+			u8 sig = 0, lanes = 0;
+			if (!imx906_read_reg8(s, 0x0111, &sig) &&
+			    !imx906_read_reg8(s, 0x0114, &lanes))
+				dev_info(s->dev,
+					 "init done: CSI_SIGNALING_MODE(0x0111)=0x%02x (%s), lanes-1(0x0114)=0x%02x\n",
+					 sig, sig == 0x02 ? "D-PHY" : "not D-PHY",
+					 lanes);
+		}
+
 		ret = imx906_write_table(s, imx906_start_regs,
 					 ARRAY_SIZE(imx906_start_regs));
 		if (ret)
@@ -382,7 +405,6 @@ static int imx906_probe(struct i2c_client *client)
 		imx906_power_off(s);
 		return ret;
 	}
-	imx906_power_off(s);
 
 	v4l2_i2c_subdev_init(&s->sd, client, &imx906_subdev_ops);
 	s->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;

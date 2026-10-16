@@ -35,10 +35,10 @@ assert start[-1][0] == 0x0100 and start[-1][1] == 1, start[-1:]
 # timing) is left exactly as the vendor set it; the link frequency is tunable
 # at load time (modprobe imx906 link_freq=<Hz>).
 # ---------------------------------------------------------------------------
-OVERRIDES = {
-    0x0111: 0x02,   # CSI_SIGNALING_MODE: D-PHY
-    0x0114: 0x03,   # CSI-2 lane count - 1: 4 lanes
-}
+# The board is wired for C-PHY (Android CSIPHY: 3phase:1, lane_cnt 0x3), so the
+# vendor values are kept as-is: 0x0111 = 0x03 (C-PHY), 0x0114 = 0x02 (3 lanes).
+# mainline camss handles it through the sm8650 C-PHY lane register set.
+OVERRIDES = {}
 
 init = [(a, OVERRIDES.get(a, d)) for a, d in init]
 for a, d in OVERRIDES.items():

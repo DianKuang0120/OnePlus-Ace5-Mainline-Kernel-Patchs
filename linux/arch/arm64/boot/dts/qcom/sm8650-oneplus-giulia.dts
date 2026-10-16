@@ -3,6 +3,7 @@
 /dts-v1/;
 
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/media/video-interfaces.h>
 #include <dt-bindings/clock/qcom,sm8650-camcc.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
@@ -809,7 +810,7 @@
 
 		port@1 {
 			csiphy1_ep: endpoint {
-				data-lanes = <0 1 2 3>;
+				data-lanes = <0 1 2>;
 				remote-endpoint = <&imx906_ep>;
 			};
 		};
@@ -875,8 +876,9 @@
 		port {
 			imx906_ep: endpoint {
 				remote-endpoint = <&csiphy1_ep>;
-				data-lanes = <0 1 2 3>;
-				link-frequencies = /bits/ 64 <934000000>;
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+				data-lanes = <0 1 2>;
+				link-frequencies = /bits/ 64 <2490000000>;
 			};
 		};
 	};

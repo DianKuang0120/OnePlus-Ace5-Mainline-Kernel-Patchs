@@ -47,18 +47,22 @@ VIDEO=$(node_of "msm_vfe1_video0") || true
 echo "giulia-cam906: sensor='$SENSOR' subdev=$SUBDEV video=$VIDEO"
 
 # --- configure the pipeline (links + matching SRGGB10 formats) ---
+echo "  - enabling links"
 $MEDIA_CTL -l '"msm_csiphy1":1->"msm_csid1":0[1]'
 $MEDIA_CTL -l '"msm_csid1":1->"msm_vfe1_rdi0":0[1]'
+echo "  - setting SRGGB10 ${W}x${H} on every pad"
 for p in "\"$SENSOR\":0" '"msm_csiphy1":0' '"msm_csiphy1":1' \
          '"msm_csid1":0' '"msm_csid1":1' '"msm_vfe1_rdi0":0'; do
     $MEDIA_CTL -V "${p}[fmt:SRGGB10_1X10/${W}x${H}]" || true
 done
 
-# --- capture one frame ---
+# --- capture one frame (never block forever) ---
 RAW=$(mktemp /tmp/giulia-cam906-XXXXXX.raw)
 trap 'rm -f "$RAW"' EXIT
 v4l2-ctl -d "$VIDEO" --set-fmt-video="width=$W,height=$H,pixelformat=pRAA"
-v4l2-ctl -d "$VIDEO" --stream-mmap --stream-count=1 --stream-to="$RAW"
+echo "  - streaming 1 frame from $VIDEO (15 s timeout)"
+timeout 15 v4l2-ctl -d "$VIDEO" --stream-mmap --stream-count=1 --stream-to="$RAW" \
+    || { echo "giulia-cam906: no frame (timeout) - check dmesg" >&2; exit 1; }
 
 # --- unpack RAW10 + debayer RGGB -> PGM ---
 python3 - "$RAW" "$OUT" "$W" "$H" <<'PY'
