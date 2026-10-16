@@ -2,7 +2,7 @@
 /*
  * BOE AA577-P-3-A0020 AMOLED panel as found in OnePlus 13R / Ace 5 (giulia).
  *
- * Copyright (c) 2026, Oleg Peshkov
+ * Copyright (c) 2026, DianKuang
  */
 
 #include <linux/backlight.h>
@@ -1560,6 +1560,6 @@ static struct mipi_dsi_driver panel_aa577_p_3_a0020_dsc_driver = {
 };
 module_mipi_dsi_driver(panel_aa577_p_3_a0020_dsc_driver);
 
-MODULE_AUTHOR("Oleg Peshkov <olegos.wst@gmail.com>");
+MODULE_AUTHOR("DianKuang <diankuang114514@gmail.com>");
 MODULE_DESCRIPTION("DRM driver for AA577 P 3 A0020 dsc cmd mode panel");
 MODULE_LICENSE("GPL");
