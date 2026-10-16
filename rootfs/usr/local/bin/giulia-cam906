@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# giulia-cam906 - capture a single RAW frame from the 50MP main Sony IMX906
+#                 (LYT-700) and debayer it to a viewable PGM.
+#
+# giulia wiring (downstream qcom,cam-sensor0):
+#   IMX906 -> CCI0 master1 -> CSI PHY1 -> CSID1 -> VFE1 RDI0
+# mainline pipeline:
+#   "imx906 <bus>-001a" -> "msm_csiphy1" -> "msm_csid1" -> "msm_vfe1_rdi0"
+#
+# The sensor is put into 4-lane D-PHY by the driver's init table
+# (Sony CSI_SIGNALING_MODE 0x0111 = 0x02); OPLUS itself runs it as C-PHY,
+# which mainline camss does not support yet.
+#
+# Usage:
+#   giulia-cam906 [out.pgm] [width] [height]
+# Defaults: /tmp/giulia-cam906.pgm 4096 3072
+set -eu
+
+OUT=${1:-/tmp/giulia-cam906.pgm}
+W=${2:-4096}
+H=${3:-3072}
+
+MEDIA=/dev/media0
+MEDIA_CTL="media-ctl -d $MEDIA"
+
+die() { echo "giulia-cam906: $*" >&2; exit 1; }
+command -v media-ctl >/dev/null || die "media-ctl not found (v4l-utils)"
+command -v v4l2-ctl  >/dev/null || die "v4l2-ctl not found (v4l-utils)"
+
+# --- locate nodes from the media graph ---
+node_of() { # $1 = entity name prefix
+    $MEDIA_CTL -p 2>/dev/null | awk -v e="$1" '
+        $0 ~ "entity [0-9]+: "e { f=1 }
+        f && /device node name/ { print $NF; exit }'
+}
+ent_of() { # $1 = entity name prefix -> full entity name
+    $MEDIA_CTL -p 2>/dev/null | sed -n "s/.*entity [0-9]*: \($1.*\) (.*/\1/p" | head -1
+}
+
+SENSOR=$(ent_of "imx906") || true
+[ -n "${SENSOR:-}" ] || die "imx906 entity not found - is the sensor probed?"
+SUBDEV=$(node_of "imx906") || true
+VIDEO=$(node_of "msm_vfe1_video0") || true
+[ -n "${VIDEO:-}" ] || VIDEO=$(node_of "msm_vfe1_rdi0") || true
+[ -n "${VIDEO:-}" ] || die "VFE1 RDI0 video node not found"
+
+echo "giulia-cam906: sensor='$SENSOR' subdev=$SUBDEV video=$VIDEO"
+
+# --- configure the pipeline (links + matching SRGGB10 formats) ---
+$MEDIA_CTL -l '"msm_csiphy1":1->"msm_csid1":0[1]'
+$MEDIA_CTL -l '"msm_csid1":1->"msm_vfe1_rdi0":0[1]'
+for p in "\"$SENSOR\":0" '"msm_csiphy1":0' '"msm_csiphy1":1' \
+         '"msm_csid1":0' '"msm_csid1":1' '"msm_vfe1_rdi0":0'; do
+    $MEDIA_CTL -V "${p}[fmt:SRGGB10_1X10/${W}x${H}]" || true
+done
+
+# --- capture one frame ---
+RAW=$(mktemp /tmp/giulia-cam906-XXXXXX.raw)
+trap 'rm -f "$RAW"' EXIT
+v4l2-ctl -d "$VIDEO" --set-fmt-video="width=$W,height=$H,pixelformat=pRAA"
+v4l2-ctl -d "$VIDEO" --stream-mmap --stream-count=1 --stream-to="$RAW"
+
+# --- unpack RAW10 + debayer RGGB -> PGM ---
+python3 - "$RAW" "$OUT" "$W" "$H" <<'PY'
+import sys, numpy as np
+raw, out, w, h = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+a = np.fromfile(raw, dtype=np.uint8)
+d = a[: (len(a) // 5) * 5].reshape(-1, 5).astype(np.uint16)
+px = np.empty(d.shape[0] * 4, dtype=np.uint16)
+px[0::4] = (d[:, 0] << 2) | (d[:, 4] & 3)
+px[1::4] = (d[:, 1] << 2) | ((d[:, 4] >> 2) & 3)
+px[2::4] = (d[:, 2] << 2) | ((d[:, 4] >> 4) & 3)
+px[3::4] = (d[:, 3] << 2) | ((d[:, 4] >> 6) & 3)
+f = px[:w * h].reshape(h, w).astype(np.float32)
+lo, hi = np.percentile(f, 1), np.percentile(f, 99.5)
+g = np.clip((f - lo) / max(1.0, hi - lo), 0, 1)
+img = (g * 255).astype(np.uint8)
+with open(out, "wb") as fh:
+    fh.write(b"P5\n%d %d\n255\n" % (w, h) + img.tobytes())
+print("giulia-cam906: wrote %s (%dx%d, min=%d max=%d mean=%.1f)"
+      % (out, w, h, f.min(), f.max(), f.mean()))
+PY

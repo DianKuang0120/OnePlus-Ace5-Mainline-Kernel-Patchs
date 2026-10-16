@@ -876,7 +876,7 @@
 			imx906_ep: endpoint {
 				remote-endpoint = <&csiphy1_ep>;
 				data-lanes = <0 1 2 3>;
-				link-frequencies = /bits/ 64 <600000000>;
+				link-frequencies = /bits/ 64 <934000000>;
 			};
 		};
 	};

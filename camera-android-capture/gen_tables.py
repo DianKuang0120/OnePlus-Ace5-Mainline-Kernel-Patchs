@@ -24,6 +24,27 @@ start = w[IDX_STREAM:IDX_END]
 
 assert start[-1][0] == 0x0100 and start[-1][1] == 1, start[-1:]
 
+# ---------------------------------------------------------------------------
+# Mainline camss only supports D-PHY (camss_parse_endpoint() rejects C-PHY),
+# while OPLUS drives the IMX906 as C-PHY.  Sony's CSI_SIGNALING_MODE register
+# 0x0111 selects the PHY (the in-flight IMX681 driver documents 0x02 = D-PHY),
+# and 0x0114 holds the lane count - 1 (IMX355, a 4-lane D-PHY part, uses 0x03;
+# the OPLUS IMX906 config uses 0x02 = 3 C-PHY trios).
+#
+# So switch the part to 4-lane D-PHY for mainline.  Everything else (PLL, crop,
+# timing) is left exactly as the vendor set it; the link frequency is tunable
+# at load time (modprobe imx906 link_freq=<Hz>).
+# ---------------------------------------------------------------------------
+OVERRIDES = {
+    0x0111: 0x02,   # CSI_SIGNALING_MODE: D-PHY
+    0x0114: 0x03,   # CSI-2 lane count - 1: 4 lanes
+}
+
+init = [(a, OVERRIDES.get(a, d)) for a, d in init]
+for a, d in OVERRIDES.items():
+    assert any(r[0] == a for r in init), f"0x{a:04x} not in table"
+
+
 def emit(name, regs):
     s = "static const struct imx906_reg %s[] = {\n" % name
     for i, (a, d) in enumerate(regs):

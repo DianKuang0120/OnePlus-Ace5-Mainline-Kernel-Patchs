@@ -135,30 +135,50 @@ CSIPHY1: 3phase:1 (C-PHY!), lane_cnt: 0x3, lane_assign: 0x210,
 
 **The IMX906 is driven in C-PHY mode (3 trios), not D-PHY.**
 
-## 6. Consequence: mainline camss only accepts D-PHY
+## 6. PHY: OPLUS runs C-PHY, mainline does D-PHY — we switch the sensor
 
-`drivers/media/platform/qcom/camss/camss.c` rejects anything but
-`V4L2_MBUS_CSI2_DPHY` ("Most SoCs support both D-PHY and C-PHY standards, but
-currently only D-PHY is supported in the driver"), **yet** the sm8650 csiphy
-resources already use `csiphy_ops_3ph_1_0` (the C-PHY ops).
+Android reports the IMX906 on **C-PHY** (CSIPHY1 `3phase:1`, 3 trios,
+`datarate 7471533333`), while mainline camss rejects anything but D-PHY
+(`camss_parse_endpoint()`: "currently only D-PHY is supported in the driver").
 
-Two ways forward:
+Sony's **`0x0111` = CSI_SIGNALING_MODE** selects the PHY; the in-flight
+mainline **IMX681** driver documents it:
 
-1. **Let mainline speak C-PHY** — allow `V4L2_MBUS_CSI2_CPHY` in
-   `camss_parse_endpoint()`, describe the sensor endpoint as C-PHY with
-   `data-lanes = <0 1 2>` (3 trios) and set the link frequency from
-   `datarate` (`7471533333`, qcom reports the aggregate → per-trio ≈ 2.49 G),
-   then check `csiphy_ops_3ph_1_0` really is selected for the port.
-2. **Switch the sensor to D-PHY** — `0x0111` is the Sony
-   `CSI_SIGNALING_MODE` register and the vendor writes `0x03`; try `0x01`/`0x02`
-   with a matching PLL/lane setup and a D-PHY link frequency.
+```c
+/* 0x02 is D-PHY, which is the only mode this part offers. */
+{ IMX681_REG_CSI_SIGNALING_MODE, 0x02 },
+```
 
-Option 1 is the honest one (the hardware does it, the driver just refuses).
+and **`0x0114`** is the lane count - 1 (IMX355, a 4-lane D-PHY part, writes
+`0x03`; the OPLUS IMX906 config writes `0x02` = 3 C-PHY trios).
+
+The vendor IMX906 tables write `0x0111 = 0x03` (C-PHY) and `0x0114 = 0x02`
+(3 lanes), so `gen_tables.py` overrides just those two:
+
+```python
+OVERRIDES = { 0x0111: 0x02,   # CSI_SIGNALING_MODE: D-PHY
+              0x0114: 0x03 }  # CSI-2 lane count - 1: 4 lanes
+```
+
+Everything else (PLL, crop, timing) stays exactly as OPLUS wrote it.
+The link frequency is a module parameter (`modprobe imx906 link_freq=<Hz>`),
+default **934 MHz** = the reported 7.47 Gb/s aggregate / (2 * 4 lanes) - sweep
+it if the PHY will not lock.
+
+(The alternative - teaching mainline camss C-PHY by porting the Android
+`cam_csiphy` 3-phase register tables into `camss-csiphy-3ph-1-0.c` - is the
+"honest" fix but a much larger job; the sm8650 csiphy resources already use
+`csiphy_ops_3ph_1_0`, only the DT parse blocks it.)
 
 ## 7. Status
 
-* `imx906_tables.h` — generated (559 init + 22 stream-on writes), driver builds.
-* DTS — node, rails, MCLK1 + GDSC, reset, `&cci0_i2c1`, camss `port@1` ready;
-  endpoint still says `data-lanes = <0 1 2 3>` + a guessed 600 MHz — must
-  become C-PHY / 3 trios.
-* Missing: C-PHY plumbing (see §6) and finally an image.
+* `imx906_tables.h` — generated (559 init + 22 stream-on writes; D-PHY), builds.
+* DTS — node, six rails, MCLK1 + TITAN_TOP GDSC, reset, `&cci0_i2c1`, camss
+  `port@1` (csiphy1, 4 lanes, link-frequencies 934 MHz).
+* Driver — real V4L2 subdev: powers on, identifies 0x0906, replays init on
+  `s_stream(1)` + the stream-on table, exposes LINK_FREQ/PIXEL_RATE.
+* Installed into the ESP/Linux-rootfs (module + dtb), so the next mainline boot
+  has everything.
+* Test with `giulia-cam906` (see `rootfs/usr/local/bin/`).
+* Missing: an actual image (and then exposure/gain controls, AE).
+
