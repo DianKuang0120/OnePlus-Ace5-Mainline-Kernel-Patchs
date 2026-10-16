@@ -642,6 +642,7 @@
 		/* camera dvdd for the ultrawide (downstream pm_v6g_l2, 1.2 V) */
 		vreg_l2g_1p2: ldo2 {
 			regulator-name = "vreg_l2g_1p2";
+			regulator-always-on;
 			regulator-min-microvolt = <1200000>;
 			regulator-max-microvolt = <1200000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -747,6 +748,7 @@
 
 		vreg_l4m_2p8: ldo4 {
 			regulator-name = "vreg_l4m_2p8";
+			regulator-always-on;
 			regulator-min-microvolt = <2800000>;
 			regulator-max-microvolt = <2800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -754,15 +756,18 @@
 
 		vreg_l5m_1p8: ldo5 {
 			regulator-name = "vreg_l5m_1p8";
+			regulator-always-on;
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
-		vreg_l6m_2p8: ldo6 {
-			regulator-name = "vreg_l6m_2p8";
-			regulator-min-microvolt = <2800000>;
-			regulator-max-microvolt = <2800000>;
+		/* giulia: L6M is 1.8 V (downstream pm8010m_l6 init-voltage), not
+		 * the 2.8 V the reference board uses. */
+		vreg_l6m_1p8: ldo6 {
+			regulator-name = "vreg_l6m_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
@@ -834,6 +839,31 @@
 				link-frequencies = /bits/ 64 <360000000>;
 			};
 		};
+	};
+};
+
+/* 50MP main: Sony IMX906 (LYT-700).  Bring-up scaffold (P1). */
+&cci0_i2c1 {
+	imx906: camera@1a {
+		compatible = "sony,imx906";
+		reg = <0x1a>;
+
+		clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clock-rates = <19200000>;
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+
+		reset-gpios = <&tlmm 82 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam1_default>;
+		pinctrl-1 = <&cam1_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		avdd-supply = <&vreg_l6m_1p8>;
+		dvdd-supply = <&vreg_l1m_1p1>;
+		dovdd-supply = <&vreg_l5m_1p8>;
+		vaf-supply = <&vreg_l7m_2p96>;
+		v_custom1-supply = <&vreg_l3m_2p8>;
+		v_custom2-supply = <&vreg_l7m_2p96>;
 	};
 };
 

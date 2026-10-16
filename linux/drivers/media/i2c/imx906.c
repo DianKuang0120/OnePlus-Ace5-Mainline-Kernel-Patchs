@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Sony IMX906 (marketed as LYT-700) - 50MP sensor, bring-up scaffold.
+ *
+ * P1: power the sensor up and identify it on the CCI bus.
+ *
+ * The full register/mode tables are NOT available (the vendor sensor driver
+ * is closed-source and there is no upstream driver yet), so this file only
+ * does identification for now: it enables the rails + MCLK, releases reset,
+ * then walks the I2C bus reading the Sony chip-id register (0x0016) at every
+ * address, logging whatever answers.  That tells us the sensor's I2C address
+ * and confirms the wiring (CCI0 master 1 + CSI PHY1 + MCLK1 on giulia).
+ *
+ * Wiring from the downstream DT (qcom,cam-sensor0): CCI0 master 1, CSI PHY1,
+ * MCLK1 (tlmm 101, 19.2 MHz), reset tlmm 82, vana pm8010m_l6 (2.8 V),
+ * vdig pm8010m_l1 (1.1 V), vio pm8010m_l5 (1.8 V), plus vaf/v_custom1/2.
+ * Chip id is 0x0906 (from the OPLUS cam_sensor_initsettings.h FTM table).
+ */
+
+#include <linux/clk.h>
+#include <linux/delay.h>
+#include <linux/gpio/consumer.h>
+#include <linux/i2c.h>
+#include <linux/module.h>
+#include <linux/regulator/consumer.h>
+
+#define IMX906_CHIP_ID_REG	0x0016
+#define IMX906_CHIP_ID		0x0906
+
+struct imx906 {
+	struct device *dev;
+	struct clk *clk;
+	struct gpio_desc *reset_gpio;
+	struct regulator *vana;
+	struct regulator *vdig;
+	struct regulator *vio;
+	struct regulator *vaf;
+	struct regulator *vcustom1;
+	struct regulator *vcustom2;
+	bool powered;
+};
+
+static const struct of_device_id imx906_of_match[] = {
+	{ .compatible = "sony,imx906" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, imx906_of_match);
+
+/* diagnostic: with power_on=0 the probe only binds (no rails/MCLK/reset) */
+static bool power_on = true;
+module_param(power_on, bool, 0444);
+MODULE_PARM_DESC(power_on, "enable rails/MCLK/reset during probe (default 1)");
+
+/* value written to the reset gpio to release it (default 0; try 1 to invert) */
+static uint reset_release_val;
+module_param(reset_release_val, uint, 0644);
+MODULE_PARM_DESC(reset_release_val, "gpio value that releases reset (default 0)");
+
+/* diagnostic bitmask when power_on=1: 1=rails 2=MCLK 4=reset (default 7) */
+static uint power_mask = 7;
+module_param(power_mask, uint, 0644);
+MODULE_PARM_DESC(power_mask, "which power steps to run: 1=rails 2=MCLK 4=reset");
+
+/* which rails to enable: 1=vana(l6m) 2=vdig(l1m) 4=vio(l5m) (default 7) */
+static uint rail_mask = 7;
+module_param(rail_mask, uint, 0644);
+MODULE_PARM_DESC(rail_mask, "which rails: 1=vana 2=vdig 4=vio");
+
+static int imx906_reg_enable(struct regulator *r, const char *name)
+{
+	int ret;
+
+	if (IS_ERR_OR_NULL(r))
+		return 0;
+	ret = regulator_enable(r);
+	if (ret)
+		pr_err("imx906: failed to enable %s: %d\n", name, ret);
+	return ret;
+}
+
+static int imx906_power_on(struct imx906 *s)
+{
+	int ret;
+
+	/* MCLK first (like imx355), then rails, then release reset */
+	if (power_mask & 2) {
+		ret = clk_prepare_enable(s->clk);
+		if (ret) {
+			dev_err(s->dev, "failed to enable MCLK: %d\n", ret);
+			return ret;
+		}
+		dev_info(s->dev, "step: MCLK enabled\n");
+	}
+
+	if (power_mask & 1) {
+		ret = 0;
+		if (rail_mask & 1) {
+			ret = imx906_reg_enable(s->vana, "vana(l6m)");
+			if (ret)
+				return ret;
+			dev_info(s->dev, "step: rail vana (l6m) enabled\n");
+		}
+		if (rail_mask & 2) {
+			imx906_reg_enable(s->vdig, "vdig(l1m)");
+			dev_info(s->dev, "step: rail vdig (l1m) enabled\n");
+		}
+		if (rail_mask & 4) {
+			imx906_reg_enable(s->vio, "vio(l5m)");
+			dev_info(s->dev, "step: rail vio (l5m) enabled\n");
+		}
+		/* extra rails the downstream cam-sensor0 also lists */
+		imx906_reg_enable(s->vaf, "vaf(l7m)");
+		imx906_reg_enable(s->vcustom1, "v_custom1(l3m)");
+		imx906_reg_enable(s->vcustom2, "v_custom2(l7m)");
+		dev_info(s->dev, "step: extra rails (vaf/v_custom1/v_custom2) enabled\n");
+		usleep_range(1000, 2000);
+	}
+
+	if ((power_mask & 4) && !IS_ERR_OR_NULL(s->reset_gpio)) {
+		gpiod_set_value_cansleep(s->reset_gpio, reset_release_val);
+		dev_info(s->dev, "step: reset set to %u\n", reset_release_val);
+	}
+
+	msleep(20);
+	return 0;
+}
+
+/* read a 16-bit-addressed register; returns 0 (and *val) on ACK */
+static int imx906_read_reg(struct i2c_client *client, u16 reg, u32 *val,
+			   unsigned int len)
+{
+	u8 buf[4];
+	struct i2c_msg msgs[2] = {
+		{ .addr = client->addr, .flags = 0, .len = 2, .buf = buf },
+		{ .addr = client->addr, .flags = I2C_M_RD, .len = len, .buf = buf },
+	};
+	int ret;
+
+	buf[0] = reg >> 8;
+	buf[1] = reg & 0xff;
+
+	ret = i2c_transfer(client->adapter, msgs, 2);
+	if (ret != 2)
+		return ret < 0 ? ret : -EIO;
+
+	*val = 0;
+	for (unsigned int i = 0; i < len; i++)
+		*val = (*val << 8) | buf[i];
+	return 0;
+}
+
+static int imx906_probe(struct i2c_client *client)
+{
+	struct device *dev = &client->dev;
+	struct imx906 *s;
+	int ret;
+
+	s = devm_kzalloc(dev, sizeof(*s), GFP_KERNEL);
+	if (!s)
+		return -ENOMEM;
+	s->dev = dev;
+	i2c_set_clientdata(client, s);
+
+	s->clk = devm_clk_get_optional(dev, NULL);
+	if (IS_ERR(s->clk))
+		return dev_err_probe(dev, PTR_ERR(s->clk), "no clock\n");
+
+	s->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+
+	s->vana = devm_regulator_get_optional(dev, "avdd");
+	s->vdig = devm_regulator_get_optional(dev, "dvdd");
+	s->vio = devm_regulator_get_optional(dev, "dovdd");
+	s->vaf = devm_regulator_get_optional(dev, "vaf");
+	s->vcustom1 = devm_regulator_get_optional(dev, "v_custom1");
+	s->vcustom2 = devm_regulator_get_optional(dev, "v_custom2");
+
+	if (!power_on) {
+		dev_info(dev, "power_on=0: bound without powering (use sysfs 'power' to trigger)\n");
+		return 0;
+	}
+
+	if (imx906_power_on(s))
+		return -EIO;
+	s->powered = true;
+
+	dev_info(dev, "powered (MCLK %lu Hz)\n",
+		 s->clk ? clk_get_rate(s->clk) : 0);
+
+	for (u16 reg = 0x0000; reg <= 0x0016; reg += (reg == 0 ? 0x16 : 1)) {
+		u32 val = 0;
+
+		ret = imx906_read_reg(client, reg, &val, 2);
+		if (ret)
+			dev_info(dev, "reg 0x%04x: no ACK (%d)\n", reg, ret);
+		else
+			dev_info(dev, "reg 0x%04x = 0x%04x%s\n", reg, val,
+				 val == IMX906_CHIP_ID ? "  <== IMX906 chip id!" : "");
+	}
+
+	/* keep bound so the rails/MCLK stay up for follow-up poking */
+	return 0;
+}
+
+static void imx906_remove(struct i2c_client *client)
+{
+	struct imx906 *s = i2c_get_clientdata(client);
+
+	if (!s)
+		return;
+	clk_disable_unprepare(s->clk);
+	regulator_disable(s->vana);
+}
+
+/* runtime power trigger (diagnostic).  NOTE: must not be called "power":
+ * struct device already has a "power" directory (dev_pm). */
+static ssize_t sensor_power_show(struct device *dev, struct device_attribute *attr,
+				 char *buf)
+{
+	struct imx906 *s = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%d\n", s ? s->powered : 0);
+}
+
+static ssize_t sensor_power_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct imx906 *s = dev_get_drvdata(dev);
+	bool on;
+	int ret;
+
+	if (!s)
+		return -ENODEV;
+
+	ret = kstrtobool(buf, &on);
+	if (ret)
+		return ret;
+
+	if (on && !s->powered) {
+		struct i2c_client *client = to_i2c_client(dev);
+		static const u8 addrs[] = { 0x1a, 0x34, 0x10, 0x20, 0x36 };
+		unsigned int i;
+
+		dev_info(dev, "runtime power on (power_mask=%u rail_mask=%u reset=%u)\n",
+			 power_mask, rail_mask, reset_release_val);
+		if (imx906_power_on(s))
+			return -EIO;
+		s->powered = true;
+
+		for (i = 0; i < ARRAY_SIZE(addrs); i++) {
+			struct i2c_client tmp = *client;
+			u32 val = 0;
+
+			tmp.addr = addrs[i];
+			if (!imx906_read_reg(&tmp, IMX906_CHIP_ID_REG, &val, 2))
+				dev_info(dev, "addr 0x%02x reg 0x%04x = 0x%04x%s\n",
+					 addrs[i], IMX906_CHIP_ID_REG, val,
+					 (val & 0xff) == 0x06 ? "  <== IMX906?" : "");
+			else
+				dev_info(dev, "addr 0x%02x: no ACK\n", addrs[i]);
+		}
+	} else if (!on && s->powered) {
+		clk_disable_unprepare(s->clk);
+		regulator_disable(s->vana);
+		regulator_disable(s->vdig);
+		regulator_disable(s->vio);
+		s->powered = false;
+	}
+	return count;
+}
+static DEVICE_ATTR_RW(sensor_power);
+
+static struct attribute *imx906_attrs[] = {
+	&dev_attr_sensor_power.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(imx906);
+
+static struct i2c_driver imx906_driver = {
+	.driver = {
+		.name = "imx906",
+		.of_match_table = imx906_of_match,
+		.dev_groups = imx906_groups,
+	},
+	.probe = imx906_probe,
+	.remove = imx906_remove,
+};
+module_i2c_driver(imx906_driver);
+
+MODULE_DESCRIPTION("Sony IMX906 (LYT-700) bring-up scaffold");
+MODULE_LICENSE("GPL");
