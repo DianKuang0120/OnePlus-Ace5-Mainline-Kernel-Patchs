@@ -1,0 +1,14 @@
+[Unit]
+Description=giulia automatic brightness (SSC TCS3720 wise_rgb via libssc)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# wise_rgb element 9 is lux; tune with -d/-i/-b if the payload layout differs.
+ExecStart=/usr/local/bin/giulia-brightnessd
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

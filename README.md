@@ -8,7 +8,7 @@
 | Side buttons         |                         | ✅    |
 | Mute slider          | AK09970 hall + userspace daemon | ✅    |
 | Proximity sensor     | SSC tcs3720 via FastRPC/libssc | ✅    |
-| Light sensor         | OPLUS-disabled (module_ignore; no SSC ambient_light) | ❌ |
+| Light sensor         | TCS3720 via vendor wise_rgb + giulia-brightnessd | ✅ |
 | Accelerometer        | SSC icm456xx via FastRPC/libssc | ✅    |
 | Gyroscope            | SSC icm456xx via libssc | ✅    |
 | Magnetometer         | SSC mmc56x3x via FastRPC/libssc | ✅    |
