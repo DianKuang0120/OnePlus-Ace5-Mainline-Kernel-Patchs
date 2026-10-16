@@ -114,10 +114,12 @@ monitor-sensor --all                               # iio-sensor-proxy 的 D-Bus 
 
 ## 已知待调
 
-- **加速计方向矩阵：已定为单位阵**（`1,0,0; 0,1,0; 0,0,1`）。
-  实测（2026-10-16）：平放屏幕朝上 `ssccli --sensor accelerometer` = `Z≈+9.88`，
-  竖直竖屏顶朝上 = `Y≈+9.8` → SSC 输出已是标准设备系，无需变换。
-  （caihong 是平板、自然方向不同，所以它需要 90° 矩阵；giulia 竖屏手机不需要。）
+- **加速计方向矩阵：`-1,0,0; 0,-1,0; 0,0,1`（绕 Z 180°）**。
+  实测（2026-10-16）：平放屏幕朝上 SSC 给 `Z≈+9.88`、竖屏顶朝上 `Y≈+9.8`
+  → SSC 用物理设备系（+X 右、+Y 上、+Z 朝外）；而 iio-sensor-proxy 期望
+  （+X 左、+Y 下、+Z 朝外，见其 `test-orientation.c`：`(0,-9.8,0)=normal`、
+  `(-9.8,0,0)=right-up`）→ 需绕 Z 转 180°。**已实机验证：横屏（前置摄像头在左）
+  自动旋转正确**。切换矩阵的调试脚本见 `try-rotation.sh`。
 - **光照：硬件在、也在出数，但走厂商通道**。giulia 的 SSC 把 TCS3720 环境光发布成
   OPLUS 厂商 data type **`wise_rgb`**（16 个 float、~10Hz；第 9 个是 lux、第 10 个是递增
   计数、第 11 个是类型），**不发布标准 `ambient_light`**（`ssccli --sensor light` /
