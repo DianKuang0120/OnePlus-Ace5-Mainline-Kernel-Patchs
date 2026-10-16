@@ -806,6 +806,13 @@
 				remote-endpoint = <&imx355_ep>;
 			};
 		};
+
+		port@1 {
+			csiphy1_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&imx906_ep>;
+			};
+		};
 	};
 };
 
@@ -864,6 +871,14 @@
 		vaf-supply = <&vreg_l7m_2p96>;
 		v_custom1-supply = <&vreg_l3m_2p8>;
 		v_custom2-supply = <&vreg_l7m_2p96>;
+
+		port {
+			imx906_ep: endpoint {
+				remote-endpoint = <&csiphy1_ep>;
+				data-lanes = <0 1 2 3>;
+				link-frequencies = /bits/ 64 <600000000>;
+			};
+		};
 	};
 };
 

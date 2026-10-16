@@ -1,44 +1,119 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Sony IMX906 (marketed as LYT-700) - 50MP sensor, bring-up scaffold.
+ * Sony IMX906 (marketed as LYT-700) - 50MP sensor, bring-up driver.
  *
- * P1: power the sensor up and identify it on the CCI bus.
+ * The register tables were captured at runtime from stock Android through the
+ * OPLUS camera kernel's CAM_CCI debug (see camera-android-capture/):
+ *   - imx906_init_regs   : the full 422-write initialisation (incl. a ~287
+ *                          write firmware/OTP blob through register 0x1000)
+ *   - imx906_start_regs  : 11 writes that finish the mode setup and turn
+ *                          streaming on (0x0100 = 1)
+ *   - per-frame AE       : exposure 0x0e20, gain 0x0e58, frame length 0x0340
  *
- * The full register/mode tables are NOT available (the vendor sensor driver
- * is closed-source and there is no upstream driver yet), so this file only
- * does identification for now: it enables the rails + MCLK, releases reset,
- * then walks the I2C bus reading the Sony chip-id register (0x0016) at every
- * address, logging whatever answers.  That tells us the sensor's I2C address
- * and confirms the wiring (CCI0 master 1 + CSI PHY1 + MCLK1 on giulia).
- *
- * Wiring from the downstream DT (qcom,cam-sensor0): CCI0 master 1, CSI PHY1,
- * MCLK1 (tlmm 101, 19.2 MHz), reset tlmm 82, vana pm8010m_l6 (2.8 V),
- * vdig pm8010m_l1 (1.1 V), vio pm8010m_l5 (1.8 V), plus vaf/v_custom1/2.
- * Chip id is 0x0906 (from the OPLUS cam_sensor_initsettings.h FTM table).
+ * Wiring on giulia (downstream qcom,cam-sensor0): CCI0 master 1, CSI PHY1,
+ * MCLK1 (gpio101, 19.2 MHz), reset gpio82, rails
+ *   avdd=pm8010m_l6 (1.8V), dvdd=pm8010m_l1 (1.1V), dovdd=pm8010m_l5 (1.8V),
+ *   vaf=pm8010m_l7, v_custom1=pm8010m_l3, v_custom2=pm8010m_l7.
+ * Chip id 0x0906 at I2C address 0x1a (16-bit regs, 8-bit data for writes).
  */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/media-bus-format.h>
 #include <linux/module.h>
+#include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
+#include <linux/videodev2.h>
 
-#define IMX906_CHIP_ID_REG	0x0016
-#define IMX906_CHIP_ID		0x0906
+#include <media/v4l2-ctrls.h>
+#include <media/v4l2-device.h>
+#include <media/v4l2-fwnode.h>
+#include <media/v4l2-subdev.h>
+
+#include "imx906_tables.h"
+
+#define IMX906_REG_CHIP_ID	0x0016
+#define IMX906_CHIP_ID_MSB	0x09
+#define IMX906_CHIP_ID_LSB	0x06
+
+#define IMX906_REG_STREAM	0x0100
+#define IMX906_REG_EXPOSURE	0x0e20	/* 8-bit (observed) */
+#define IMX906_REG_GAIN		0x0e58	/* 8-bit (observed) */
+#define IMX906_REG_FLL		0x0340	/* frame length, low byte observed */
+
+#define IMX906_MODE_WIDTH	4096
+#define IMX906_MODE_HEIGHT	3072
+#define IMX906_MODE_FLL_DEF	0x0d00
+#define IMX906_MODE_FLL_MIN	0x0d00
+#define IMX906_MODE_LLP		0x0d00
+#define IMX906_LINK_FREQ_DEF	600000000
+#define IMX906_NUM_DATA_LANES	4
+
+#define IMX906_EXPOSURE_DEF	0x0400
+#define IMX906_EXPOSURE_MAX	0x0d00
+#define IMX906_GAIN_DEF		0x0100
+#define IMX906_GAIN_MAX		0x0fff
+
+/* giulia rails, in the downstream cam-sensor0 order */
+static const char * const imx906_supply_names[] = {
+	"avdd", "dvdd", "dovdd", "vaf", "v_custom1", "v_custom2",
+};
+
+struct imx906_mode {
+	u32 width;
+	u32 height;
+	u32 fll_def;
+	u32 fll_min;
+	u32 llp;
+	u32 link_freq_idx;
+};
 
 struct imx906 {
 	struct device *dev;
+	struct i2c_client *client;
 	struct clk *clk;
 	struct gpio_desc *reset_gpio;
-	struct regulator *vana;
-	struct regulator *vdig;
-	struct regulator *vio;
-	struct regulator *vaf;
-	struct regulator *vcustom1;
-	struct regulator *vcustom2;
-	bool powered;
+	struct regulator_bulk_data supplies[ARRAY_SIZE(imx906_supply_names)];
+
+	struct v4l2_subdev sd;
+	struct media_pad pad;
+	struct v4l2_mbus_framefmt fmt;
+	struct v4l2_ctrl_handler ctrl_handler;
+	struct v4l2_ctrl *link_freq;
+	struct v4l2_ctrl *pixel_rate;
+
+	const struct imx906_mode *cur_mode;
 };
+
+/*
+ * The MIPI link frequency is not in the downstream DT (it lives in the
+ * closed sensor .ko), so make it overridable at load time:
+ *   modprobe imx906 link_freq=<Hz>
+ * With the CSIPHY debug the vendor kernel prints it as "datarate:" in bps;
+ * mainline's link frequency is datarate / 2 (DDR clock lane).
+ */
+static s64 imx906_link_freq_menu[1] = { IMX906_LINK_FREQ_DEF };
+static unsigned long long imx906_link_freq = IMX906_LINK_FREQ_DEF;
+module_param_named(link_freq, imx906_link_freq, ullong, 0644);
+MODULE_PARM_DESC(link_freq, "MIPI link frequency in Hz (default 600 MHz)");
+
+static const struct imx906_mode imx906_modes[] = {
+	{
+		.width = IMX906_MODE_WIDTH,
+		.height = IMX906_MODE_HEIGHT,
+		.fll_def = IMX906_MODE_FLL_DEF,
+		.fll_min = IMX906_MODE_FLL_MIN,
+		.llp = IMX906_MODE_LLP,
+		.link_freq_idx = 0,
+	},
+};
+
+static inline struct imx906 *to_imx906(struct v4l2_subdev *sd)
+{
+	return container_of(sd, struct imx906, sd);
+}
 
 static const struct of_device_id imx906_of_match[] = {
 	{ .compatible = "sony,imx906" },
@@ -46,245 +121,347 @@ static const struct of_device_id imx906_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, imx906_of_match);
 
-/* diagnostic: with power_on=0 the probe only binds (no rails/MCLK/reset) */
-static bool power_on = true;
-module_param(power_on, bool, 0444);
-MODULE_PARM_DESC(power_on, "enable rails/MCLK/reset during probe (default 1)");
+/* ---- i2c helpers: 16-bit register address, 8-bit data ---- */
 
-/* value written to the reset gpio to release it (default 0; try 1 to invert) */
-static uint reset_release_val;
-module_param(reset_release_val, uint, 0644);
-MODULE_PARM_DESC(reset_release_val, "gpio value that releases reset (default 0)");
-
-/* diagnostic bitmask when power_on=1: 1=rails 2=MCLK 4=reset (default 7) */
-static uint power_mask = 7;
-module_param(power_mask, uint, 0644);
-MODULE_PARM_DESC(power_mask, "which power steps to run: 1=rails 2=MCLK 4=reset");
-
-/* which rails to enable: 1=vana(l6m) 2=vdig(l1m) 4=vio(l5m) (default 7) */
-static uint rail_mask = 7;
-module_param(rail_mask, uint, 0644);
-MODULE_PARM_DESC(rail_mask, "which rails: 1=vana 2=vdig 4=vio");
-
-static int imx906_reg_enable(struct regulator *r, const char *name)
+static int imx906_write_reg(struct imx906 *s, u16 reg, u8 val)
 {
+	u8 buf[3] = { reg >> 8, reg & 0xff, val };
+	struct i2c_msg msg = {
+		.addr = s->client->addr, .flags = 0, .len = 3, .buf = buf,
+	};
+
+	return i2c_transfer(s->client->adapter, &msg, 1) == 1 ? 0 : -EIO;
+}
+
+static int imx906_write_table(struct imx906 *s, const struct imx906_reg *t,
+			      unsigned int n)
+{
+	unsigned int i;
 	int ret;
 
-	if (IS_ERR_OR_NULL(r))
-		return 0;
-	ret = regulator_enable(r);
-	if (ret)
-		pr_err("imx906: failed to enable %s: %d\n", name, ret);
-	return ret;
+	for (i = 0; i < n; i++) {
+		ret = imx906_write_reg(s, t[i].addr, t[i].val);
+		if (ret)
+			return dev_err_probe(s->dev, ret,
+					     "write 0x%04x failed\n", t[i].addr);
+	}
+	return 0;
 }
+
+static int imx906_read_reg16(struct imx906 *s, u16 reg, u16 *val)
+{
+	u8 addr[2] = { reg >> 8, reg & 0xff };
+	u8 data[2];
+	struct i2c_msg msgs[2] = {
+		{ .addr = s->client->addr, .flags = 0, .len = 2, .buf = addr },
+		{ .addr = s->client->addr, .flags = I2C_M_RD, .len = 2, .buf = data },
+	};
+
+	if (i2c_transfer(s->client->adapter, msgs, 2) != 2)
+		return -EIO;
+	*val = (data[0] << 8) | data[1];
+	return 0;
+}
+
+/* ---- power ---- */
 
 static int imx906_power_on(struct imx906 *s)
 {
 	int ret;
 
-	/* MCLK first (like imx355), then rails, then release reset */
-	if (power_mask & 2) {
-		ret = clk_prepare_enable(s->clk);
-		if (ret) {
-			dev_err(s->dev, "failed to enable MCLK: %d\n", ret);
-			return ret;
-		}
-		dev_info(s->dev, "step: MCLK enabled\n");
+	ret = clk_prepare_enable(s->clk);
+	if (ret)
+		return dev_err_probe(s->dev, ret, "failed to enable MCLK\n");
+
+	ret = regulator_bulk_enable(ARRAY_SIZE(imx906_supply_names),
+				    s->supplies);
+	if (ret) {
+		dev_err_probe(s->dev, ret, "failed to enable regulators\n");
+		clk_disable_unprepare(s->clk);
+		return ret;
 	}
 
-	if (power_mask & 1) {
-		ret = 0;
-		if (rail_mask & 1) {
-			ret = imx906_reg_enable(s->vana, "vana(l6m)");
-			if (ret)
-				return ret;
-			dev_info(s->dev, "step: rail vana (l6m) enabled\n");
-		}
-		if (rail_mask & 2) {
-			imx906_reg_enable(s->vdig, "vdig(l1m)");
-			dev_info(s->dev, "step: rail vdig (l1m) enabled\n");
-		}
-		if (rail_mask & 4) {
-			imx906_reg_enable(s->vio, "vio(l5m)");
-			dev_info(s->dev, "step: rail vio (l5m) enabled\n");
-		}
-		/* extra rails the downstream cam-sensor0 also lists */
-		imx906_reg_enable(s->vaf, "vaf(l7m)");
-		imx906_reg_enable(s->vcustom1, "v_custom1(l3m)");
-		imx906_reg_enable(s->vcustom2, "v_custom2(l7m)");
-		dev_info(s->dev, "step: extra rails (vaf/v_custom1/v_custom2) enabled\n");
-		usleep_range(1000, 2000);
-	}
+	usleep_range(1000, 2000);
+	gpiod_set_value_cansleep(s->reset_gpio, 0); /* GPIO_ACTIVE_LOW: release */
+	usleep_range(20000, 21000);
 
-	if ((power_mask & 4) && !IS_ERR_OR_NULL(s->reset_gpio)) {
-		gpiod_set_value_cansleep(s->reset_gpio, reset_release_val);
-		dev_info(s->dev, "step: reset set to %u\n", reset_release_val);
-	}
-
-	msleep(20);
 	return 0;
 }
 
-/* read a 16-bit-addressed register; returns 0 (and *val) on ACK */
-static int imx906_read_reg(struct i2c_client *client, u16 reg, u32 *val,
-			   unsigned int len)
+static void imx906_power_off(struct imx906 *s)
 {
-	u8 buf[4];
-	struct i2c_msg msgs[2] = {
-		{ .addr = client->addr, .flags = 0, .len = 2, .buf = buf },
-		{ .addr = client->addr, .flags = I2C_M_RD, .len = len, .buf = buf },
-	};
+	gpiod_set_value_cansleep(s->reset_gpio, 1);
+	regulator_bulk_disable(ARRAY_SIZE(imx906_supply_names), s->supplies);
+	clk_disable_unprepare(s->clk);
+}
+
+static int imx906_identify(struct imx906 *s)
+{
+	u16 id = 0;
+
+	if (imx906_read_reg16(s, IMX906_REG_CHIP_ID, &id))
+		return -ENODEV;
+	if (id != ((IMX906_CHIP_ID_MSB << 8) | IMX906_CHIP_ID_LSB))
+		return dev_err_probe(s->dev, -EIO,
+				     "chip id mismatch: 0x%04x\n", id);
+	return 0;
+}
+
+/* ---- V4L2 subdev ---- */
+
+static int imx906_set_stream(struct v4l2_subdev *sd, int enable)
+{
+	struct imx906 *s = to_imx906(sd);
 	int ret;
 
-	buf[0] = reg >> 8;
-	buf[1] = reg & 0xff;
+	if (enable) {
+		ret = pm_runtime_resume_and_get(s->dev);
+		if (ret)
+			return ret;
 
-	ret = i2c_transfer(client->adapter, msgs, 2);
-	if (ret != 2)
-		return ret < 0 ? ret : -EIO;
+		ret = imx906_write_table(s, imx906_init_regs,
+					 ARRAY_SIZE(imx906_init_regs));
+		if (ret)
+			goto err;
+		ret = imx906_write_table(s, imx906_start_regs,
+					 ARRAY_SIZE(imx906_start_regs));
+		if (ret)
+			goto err;
+	} else {
+		ret = imx906_write_reg(s, IMX906_REG_STREAM, 0x00);
+		pm_runtime_put(s->dev);
+		if (ret)
+			return ret;
+	}
 
-	*val = 0;
-	for (unsigned int i = 0; i < len; i++)
-		*val = (*val << 8) | buf[i];
+	return 0;
+
+err:
+	pm_runtime_put(s->dev);
+	return ret;
+}
+
+static int imx906_enum_mbus_code(struct v4l2_subdev *sd,
+				 struct v4l2_subdev_state *state,
+				 struct v4l2_subdev_mbus_code_enum *code)
+{
+	if (code->index)
+		return -EINVAL;
+	code->code = MEDIA_BUS_FMT_SRGGB10_1X10;
 	return 0;
 }
+
+static int imx906_enum_frame_size(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_state *state,
+				  struct v4l2_subdev_frame_size_enum *fse)
+{
+	if (fse->index >= ARRAY_SIZE(imx906_modes))
+		return -EINVAL;
+	fse->min_width = imx906_modes[fse->index].width;
+	fse->max_width = fse->min_width;
+	fse->min_height = imx906_modes[fse->index].height;
+	fse->max_height = fse->min_height;
+	return 0;
+}
+
+static void imx906_fill_fmt(const struct imx906_mode *mode,
+			    struct v4l2_mbus_framefmt *fmt)
+{
+	fmt->width = mode->width;
+	fmt->height = mode->height;
+	fmt->code = MEDIA_BUS_FMT_SRGGB10_1X10;
+	fmt->field = V4L2_FIELD_NONE;
+	fmt->colorspace = V4L2_COLORSPACE_RAW;
+}
+
+static int imx906_get_fmt(struct v4l2_subdev *sd,
+			  struct v4l2_subdev_state *state,
+			  struct v4l2_subdev_format *fmt)
+{
+	struct imx906 *s = to_imx906(sd);
+
+	fmt->format = s->fmt;
+	return 0;
+}
+
+static int imx906_set_fmt(struct v4l2_subdev *sd,
+			  struct v4l2_subdev_state *state,
+			  struct v4l2_subdev_format *fmt)
+{
+	struct imx906 *s = to_imx906(sd);
+
+	s->cur_mode = &imx906_modes[0];
+	imx906_fill_fmt(s->cur_mode, &fmt->format);
+	s->fmt = fmt->format;
+	return 0;
+}
+
+static const struct v4l2_subdev_video_ops imx906_video_ops = {
+	.s_stream = imx906_set_stream,
+};
+
+static const struct v4l2_subdev_pad_ops imx906_pad_ops = {
+	.enum_mbus_code = imx906_enum_mbus_code,
+	.enum_frame_size = imx906_enum_frame_size,
+	.get_fmt = imx906_get_fmt,
+	.set_fmt = imx906_set_fmt,
+};
+
+static const struct v4l2_subdev_ops imx906_subdev_ops = {
+	.video = &imx906_video_ops,
+	.pad = &imx906_pad_ops,
+};
+
+static int imx906_init_controls(struct imx906 *s)
+{
+	struct v4l2_ctrl_handler *ctrl_hdlr = &s->ctrl_handler;
+	s64 pixel_rate;
+	u8 max;
+	int ret;
+
+	ret = v4l2_ctrl_handler_init(ctrl_hdlr, 2);
+	if (ret)
+		return ret;
+
+	imx906_link_freq_menu[0] = imx906_link_freq;
+	max = ARRAY_SIZE(imx906_link_freq_menu) - 1;
+	s->link_freq = v4l2_ctrl_new_int_menu(ctrl_hdlr, NULL,
+					      V4L2_CID_LINK_FREQ, max, 0,
+					      imx906_link_freq_menu);
+	if (s->link_freq)
+		s->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+
+	/* pixel_rate = link_freq * 2 * nr_of_lanes / bits_per_sample */
+	pixel_rate = imx906_link_freq * 2 * IMX906_NUM_DATA_LANES;
+	do_div(pixel_rate, 10);
+	s->pixel_rate = v4l2_ctrl_new_std(ctrl_hdlr, NULL, V4L2_CID_PIXEL_RATE,
+					  pixel_rate, pixel_rate, 1, pixel_rate);
+
+	if (ctrl_hdlr->error) {
+		v4l2_ctrl_handler_free(ctrl_hdlr);
+		return ctrl_hdlr->error;
+	}
+	s->sd.ctrl_handler = ctrl_hdlr;
+	return 0;
+}
+
+/* ---- probe ---- */
 
 static int imx906_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct imx906 *s;
+	unsigned int i;
 	int ret;
 
 	s = devm_kzalloc(dev, sizeof(*s), GFP_KERNEL);
 	if (!s)
 		return -ENOMEM;
 	s->dev = dev;
-	i2c_set_clientdata(client, s);
+	s->client = client;
 
-	s->clk = devm_clk_get_optional(dev, NULL);
+	s->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(s->clk))
 		return dev_err_probe(dev, PTR_ERR(s->clk), "no clock\n");
 
 	s->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
 
-	s->vana = devm_regulator_get_optional(dev, "avdd");
-	s->vdig = devm_regulator_get_optional(dev, "dvdd");
-	s->vio = devm_regulator_get_optional(dev, "dovdd");
-	s->vaf = devm_regulator_get_optional(dev, "vaf");
-	s->vcustom1 = devm_regulator_get_optional(dev, "v_custom1");
-	s->vcustom2 = devm_regulator_get_optional(dev, "v_custom2");
+	for (i = 0; i < ARRAY_SIZE(imx906_supply_names); i++)
+		s->supplies[i].supply = imx906_supply_names[i];
 
-	if (!power_on) {
-		dev_info(dev, "power_on=0: bound without powering (use sysfs 'power' to trigger)\n");
-		return 0;
+	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(imx906_supply_names),
+				      s->supplies);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to get regulators\n");
+
+	ret = imx906_power_on(s);
+	if (ret)
+		return ret;
+	ret = imx906_identify(s);
+	if (ret) {
+		imx906_power_off(s);
+		return ret;
+	}
+	imx906_power_off(s);
+
+	v4l2_i2c_subdev_init(&s->sd, client, &imx906_subdev_ops);
+	s->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+	s->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
+
+	s->cur_mode = &imx906_modes[0];
+	imx906_fill_fmt(s->cur_mode, &s->fmt);
+
+	ret = imx906_init_controls(s);
+	if (ret) {
+		v4l2_device_unregister_subdev(&s->sd);
+		return ret;
 	}
 
-	if (imx906_power_on(s))
-		return -EIO;
-	s->powered = true;
+	s->pad.flags = MEDIA_PAD_FL_SOURCE;
+	ret = media_entity_pads_init(&s->sd.entity, 1, &s->pad);
+	if (ret)
+		goto err_ctrl;
 
-	dev_info(dev, "powered (MCLK %lu Hz)\n",
-		 s->clk ? clk_get_rate(s->clk) : 0);
+	ret = v4l2_async_register_subdev_sensor(&s->sd);
+	if (ret)
+		goto err_entity;
 
-	for (u16 reg = 0x0000; reg <= 0x0016; reg += (reg == 0 ? 0x16 : 1)) {
-		u32 val = 0;
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
+	pm_runtime_idle(dev);
 
-		ret = imx906_read_reg(client, reg, &val, 2);
-		if (ret)
-			dev_info(dev, "reg 0x%04x: no ACK (%d)\n", reg, ret);
-		else
-			dev_info(dev, "reg 0x%04x = 0x%04x%s\n", reg, val,
-				 val == IMX906_CHIP_ID ? "  <== IMX906 chip id!" : "");
-	}
-
-	/* keep bound so the rails/MCLK stay up for follow-up poking */
+	dev_info(dev, "IMX906 (LYT-700) probed, chip id ok\n");
 	return 0;
+
+err_entity:
+	media_entity_cleanup(&s->sd.entity);
+err_ctrl:
+	v4l2_ctrl_handler_free(&s->ctrl_handler);
+	v4l2_device_unregister_subdev(&s->sd);
+	return ret;
 }
 
 static void imx906_remove(struct i2c_client *client)
 {
-	struct imx906 *s = i2c_get_clientdata(client);
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct imx906 *s = to_imx906(sd);
 
-	if (!s)
-		return;
-	clk_disable_unprepare(s->clk);
-	regulator_disable(s->vana);
+	pm_runtime_disable(s->dev);
+	v4l2_async_unregister_subdev(sd);
+	media_entity_cleanup(&sd->entity);
+	v4l2_ctrl_handler_free(&s->ctrl_handler);
 }
 
-/* runtime power trigger (diagnostic).  NOTE: must not be called "power":
- * struct device already has a "power" directory (dev_pm). */
-static ssize_t sensor_power_show(struct device *dev, struct device_attribute *attr,
-				 char *buf)
+static int imx906_runtime_suspend(struct device *dev)
 {
-	struct imx906 *s = dev_get_drvdata(dev);
+	struct v4l2_subdev *sd = dev_get_drvdata(dev);
+	struct imx906 *s = to_imx906(sd);
 
-	return sysfs_emit(buf, "%d\n", s ? s->powered : 0);
+	imx906_power_off(s);
+	return 0;
 }
 
-static ssize_t sensor_power_store(struct device *dev, struct device_attribute *attr,
-				  const char *buf, size_t count)
+static int imx906_runtime_resume(struct device *dev)
 {
-	struct imx906 *s = dev_get_drvdata(dev);
-	bool on;
-	int ret;
+	struct v4l2_subdev *sd = dev_get_drvdata(dev);
+	struct imx906 *s = to_imx906(sd);
 
-	if (!s)
-		return -ENODEV;
-
-	ret = kstrtobool(buf, &on);
-	if (ret)
-		return ret;
-
-	if (on && !s->powered) {
-		struct i2c_client *client = to_i2c_client(dev);
-		static const u8 addrs[] = { 0x1a, 0x34, 0x10, 0x20, 0x36 };
-		unsigned int i;
-
-		dev_info(dev, "runtime power on (power_mask=%u rail_mask=%u reset=%u)\n",
-			 power_mask, rail_mask, reset_release_val);
-		if (imx906_power_on(s))
-			return -EIO;
-		s->powered = true;
-
-		for (i = 0; i < ARRAY_SIZE(addrs); i++) {
-			struct i2c_client tmp = *client;
-			u32 val = 0;
-
-			tmp.addr = addrs[i];
-			if (!imx906_read_reg(&tmp, IMX906_CHIP_ID_REG, &val, 2))
-				dev_info(dev, "addr 0x%02x reg 0x%04x = 0x%04x%s\n",
-					 addrs[i], IMX906_CHIP_ID_REG, val,
-					 (val & 0xff) == 0x06 ? "  <== IMX906?" : "");
-			else
-				dev_info(dev, "addr 0x%02x: no ACK\n", addrs[i]);
-		}
-	} else if (!on && s->powered) {
-		clk_disable_unprepare(s->clk);
-		regulator_disable(s->vana);
-		regulator_disable(s->vdig);
-		regulator_disable(s->vio);
-		s->powered = false;
-	}
-	return count;
+	return imx906_power_on(s);
 }
-static DEVICE_ATTR_RW(sensor_power);
 
-static struct attribute *imx906_attrs[] = {
-	&dev_attr_sensor_power.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(imx906);
+static DEFINE_RUNTIME_DEV_PM_OPS(imx906_pm_ops, imx906_runtime_suspend,
+				 imx906_runtime_resume, NULL);
 
 static struct i2c_driver imx906_driver = {
 	.driver = {
 		.name = "imx906",
 		.of_match_table = imx906_of_match,
-		.dev_groups = imx906_groups,
+		.pm = pm_ptr(&imx906_pm_ops),
 	},
 	.probe = imx906_probe,
 	.remove = imx906_remove,
 };
 module_i2c_driver(imx906_driver);
 
-MODULE_DESCRIPTION("Sony IMX906 (LYT-700) bring-up scaffold");
+MODULE_DESCRIPTION("Sony IMX906 (LYT-700) sensor driver");
 MODULE_LICENSE("GPL");
