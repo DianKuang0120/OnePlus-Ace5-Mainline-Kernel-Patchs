@@ -22,6 +22,7 @@ W=${2:-1920}
 H=${3:-1080}
 EXP=${4:-1296}
 GAIN=${5:-300}
+DGAIN=${6:-1024}
 
 MEDIA=/dev/media0
 MEDIA_CTL="media-ctl -d $MEDIA"
@@ -52,8 +53,9 @@ for p in "\"$SENSOR\":0" '"msm_csiphy0":0' '"msm_csiphy0":1' \
 done
 
 # --- exposure / gain (best effort) ---
-v4l2-ctl -d "$SUBDEV" --set-ctrl exposure="$EXP"      2>/dev/null || true
+v4l2-ctl -d "$SUBDEV" --set-ctrl exposure="$EXP"       2>/dev/null || true
 v4l2-ctl -d "$SUBDEV" --set-ctrl analogue_gain="$GAIN" 2>/dev/null || true
+v4l2-ctl -d "$SUBDEV" --set-ctrl digital_gain="$DGAIN" 2>/dev/null || true
 
 # --- capture one frame ---
 RAW=$(mktemp /tmp/giulia-cam-XXXXXX.raw)
