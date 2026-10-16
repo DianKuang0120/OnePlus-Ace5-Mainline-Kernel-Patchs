@@ -1,0 +1,13 @@
+# giulia (OnePlus 13R / Ace 5): stable WLAN MAC
+#
+# The WCN7850 firmware leaves the WLAN base MAC unset ("cnss_utils: WLAN MAC
+# address is not set" even on stock Android -> the driver uses a default with
+# the Atheros OUI 00:03:7f).  ath12k takes its MAC from the firmware WMI ready
+# event and does not read the device tree, so set a stable, device-unique
+# address here.  Value = BT factory OUI (ac:45:ca) + sha256(serial)[0:3],
+# serial = 3B6F5VE910B6K8VH.
+[Match]
+OriginalName=wlan0
+
+[Link]
+MACAddress=ac:45:ca:a6:69:f2

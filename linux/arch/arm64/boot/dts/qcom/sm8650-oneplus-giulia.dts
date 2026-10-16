@@ -317,8 +317,8 @@
 	 * touchscreen, which is why there is no "interrupts" here.
 	 *
 	 * "firmware-name" is the trusted application the QSEECOM TEE driver
-	 * loads from the vendor firmware; on giulia it is "uff_spi"
-	 * (/odm/vendor/firmware/uff_spi.mdt).
+	 * loads from the vendor firmware; on giulia the optical part is a
+	 * Jiiov JV0301, whose TA is "uff_jv" (/odm/vendor/firmware/uff_jv.mdt).
 	 *
 	 * NOTE: the real part is a GW in-display sensor; "goodix,gf3626" is
 	 * used here as the reference driver's tested compatible until the
@@ -330,7 +330,7 @@
 		reset-gpios = <&tlmm 89 GPIO_ACTIVE_LOW>;
 		vdd-supply = <&vreg_l14b_3p2>;
 
-		firmware-name = "uff_spi";
+		firmware-name = "uff_jv";
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&fp_reset_default>;
@@ -1455,6 +1455,13 @@
 
 	bluetooth {
 		compatible = "qcom,wcn7850-bt";
+
+		/*
+		 * Factory Bluetooth address of this unit (from the stock firmware;
+		 * the mainline btqca path otherwise falls back to the controller
+		 * default).  Little-endian, so AC:45:CA:47:C8:02 -> [02 c8 47 ca 45 ac].
+		 */
+		local-bd-address = [02 c8 47 ca 45 ac];
 
 		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
 		vddaon-supply = <&vreg_pmu_aon_0p59>;

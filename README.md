@@ -20,11 +20,11 @@
 | USB device           |                         | ✅    |
 | USB power delivery   |                         | ✅    |
 | Charging             |                         | ✅    |
-| WLAN                 | Uses random MAC         | ✅    |
+| WLAN                 | MAC from serial (systemd .link) | ✅    |
 | CPU                  |                         | ✅    |
 | Gunyah               |                         | ✅    |
 | Touchscreen          | Off-tree                | ✅    |
-| Bluetooth            | Uses random MAC         | ✅    |
+| Bluetooth            | Factory MAC (DT local-bd-address) | ✅    |
 | GPS                  |                         | ❌    |
 | Speakers             | Off-tree                | ✅    |
 | Microphones          | Bottom MIC for now      | ⚠️    |
