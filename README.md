@@ -29,7 +29,7 @@
 | Speakers             | Off-tree                | ✅    |
 | Microphones          | WCD9395 analog mics: bottom(main)+top(sec) stereo, headset (UCM) | ✅    |
 | GPU                  |                         | ✅    |
-| Camera               | CAMSS up, sensor drivers missing | ❌ |
+| Camera               | Ultrawide IMX355 via camss (RAW capture); main/macro no driver | ⚠️ |
 | Flash                | pm8350c flash-led       | ✅    |
 | Calls                | VoLTE: PDC profile active; needs AP IMS stack (OpenIMSd) | ❌ |
 | SMS                  | Receive works; send fails (QMI WMS 56) | ⚠️ |

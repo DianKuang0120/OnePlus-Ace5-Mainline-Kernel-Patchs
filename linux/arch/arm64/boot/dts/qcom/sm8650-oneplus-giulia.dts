@@ -3,6 +3,7 @@
 /dts-v1/;
 
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/clock/qcom,sm8650-camcc.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
@@ -638,6 +639,17 @@
 									   RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/* camera dvdd for the ultrawide (downstream pm_v6g_l2, 1.2 V) */
+		vreg_l2g_1p2: ldo2 {
+			regulator-name = "vreg_l2g_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+									   RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		vreg_l3g_0p91: ldo3 {
 			regulator-name = "vreg_l3g_0p91";
 			regulator-min-microvolt = <880000>;
@@ -766,22 +778,70 @@
 };
 
 /*
- * Cameras differ from QRD: giulia has 50MP main LYT-700 + 8MP UW + 2MP macro,
- * powered by pm8010m/n rails. Leave CAMSS/CCI enabled for bringup, add
- * sensors later from downstream cam_sensor nodes.
+ * Cameras on giulia: 50MP main (Sony IMX906 / LYT-700), 8MP ultrawide
+ * (Sony IMX355) and a 2MP macro, powered by the pm8010m rails.
+ *
+ * Bringup target: the ultrawide IMX355 (has a mainline driver).
+ * Downstream truth (qcom,cam-sensor1): CCI0 master 0 (SDA/SCL gpio113/114),
+ * CSI PHY0, MCLK2 (gpio102, 19.2 MHz), reset gpio14,
+ * vana 2.8V (pm8010m_l4), vdig 1.2V (pm_v6g_l2), vio 1.8V (pm8010m_l5).
  */
 &camss {
+	vdd-csiphy01-0p9-supply = <&vreg_l2i_0p88>;
+	vdd-csiphy01-1p2-supply = <&vreg_l3i_1p2>;
 	vdd-csiphy35-0p9-supply = <&vreg_l2i_0p88>;
 	vdd-csiphy35-1p2-supply = <&vreg_l3i_1p2>;
 
 	status = "okay";
+
+	ports {
+		port@0 {
+			csiphy0_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&imx355_ep>;
+			};
+		};
+	};
+};
+
+&cci0 {
+	status = "okay";
+};
+
+/* 8MP ultrawide: Sony IMX355 */
+&cci0_i2c0 {
+	imx355: camera@1a {
+		compatible = "sony,imx355";
+		reg = <0x1a>;
+
+		clocks = <&camcc CAM_CC_MCLK2_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK2_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		reset-gpios = <&tlmm 14 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam2_default>;
+		pinctrl-1 = <&cam2_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		avdd-supply = <&vreg_l4m_2p8>;
+		dvdd-supply = <&vreg_l2g_1p2>;
+		dovdd-supply = <&vreg_l5m_1p8>;
+
+		port {
+			imx355_ep: endpoint {
+				remote-endpoint = <&csiphy0_ep>;
+				data-lanes = <0 1 2 3>;
+				link-frequencies = /bits/ 64 <360000000>;
+			};
+		};
+	};
 };
 
 &cci1 {
 	status = "okay";
 };
 
-/* TODO: add giulia camera sensors from downstream (not QRD's s5kjn1) */
+/* TODO: 50MP main (imx906) and 2MP macro sensors */
 &cci1_i2c0 {
 };
 

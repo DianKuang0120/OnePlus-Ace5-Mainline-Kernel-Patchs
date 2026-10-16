@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# giulia-cam - capture a single RAW frame from the ultrawide Sony IMX355 and
+#             debayer (RGGB) it to a viewable PGM.
+#
+# The giulia ultrawide is wired (see the downstream DT, qcom,cam-sensor1):
+#   IMX355 -> CCI0 master0 (SDA/SCL gpio113/114) -> CSI PHY0 -> CSID0 -> VFE0 RDI0
+# and comes up on the mainline camss/csid/vfe pipeline:
+#   "imx355 0-001a" -> "msm_csiphy0" -> "msm_csid0" -> "msm_vfe0_rdi0" -> video
+#
+# Usage:
+#   giulia-cam [out.pgm] [width] [height] [exposure] [analogue_gain]
+# Defaults: /tmp/giulia-cam.pgm 1920 1080 1296 300
+#
+# Notes:
+#  * needs root (or access to /dev/media0 and the video/subdev nodes)
+#  * the sensor Bayer order the mainline driver reports is SRGGB10 (RGGB)
+#  * mainline has no auto-exposure: bump exposure/gain for dark scenes
+set -eu
+
+OUT=${1:-/tmp/giulia-cam.pgm}
+W=${2:-1920}
+H=${3:-1080}
+EXP=${4:-1296}
+GAIN=${5:-300}
+
+MEDIA=/dev/media0
+MEDIA_CTL="media-ctl -d $MEDIA"
+
+die() { echo "giulia-cam: $*" >&2; exit 1; }
+command -v media-ctl >/dev/null || die "media-ctl not found (v4l-utils)"
+command -v v4l2-ctl  >/dev/null || die "v4l2-ctl not found (v4l-utils)"
+
+# --- locate nodes from the media graph ---
+node_of() { # $1 = entity name
+    $MEDIA_CTL -p 2>/dev/null | awk -v e="$1" '
+        $0 ~ "entity [0-9]+: "e" " { f=1 }
+        f && /device node name/ { print $NF; exit }'
+}
+
+SENSOR="imx355 0-001a"
+SUBDEV=$(node_of "$SENSOR")            || true
+VIDEO=$(node_of "msm_vfe0_video0")     || true
+[ -n "$SUBDEV" ] || die "IMX355 subdev not found - is the sensor probed?"
+[ -n "$VIDEO" ]  || die "VFE0 RDI0 video node not found"
+
+# --- configure the pipeline (links + matching SRGGB10 formats) ---
+$MEDIA_CTL -l '"msm_csiphy0":1->"msm_csid0":0[1]'
+$MEDIA_CTL -l '"msm_csid0":1->"msm_vfe0_rdi0":0[1]'
+for p in "\"$SENSOR\":0" '"msm_csiphy0":0' '"msm_csiphy0":1' \
+         '"msm_csid0":0' '"msm_csid0":1' '"msm_vfe0_rdi0":0'; do
+    $MEDIA_CTL -V "${p}[fmt:SRGGB10_1X10/${W}x${H}]"
+done
+
+# --- exposure / gain (best effort) ---
+v4l2-ctl -d "$SUBDEV" --set-ctrl exposure="$EXP"      2>/dev/null || true
+v4l2-ctl -d "$SUBDEV" --set-ctrl analogue_gain="$GAIN" 2>/dev/null || true
+
+# --- capture one frame ---
+RAW=$(mktemp /tmp/giulia-cam-XXXXXX.raw)
+trap 'rm -f "$RAW"' EXIT
+v4l2-ctl -d "$VIDEO" --set-fmt-video="width=$W,height=$H,pixelformat=pRAA"
+v4l2-ctl -d "$VIDEO" --stream-mmap --stream-count=1 --stream-to="$RAW"
+
+# --- unpack RAW10 + debayer RGGB -> PGM ---
+python3 - "$RAW" "$OUT" "$W" "$H" <<'PY'
+import sys, numpy as np
+raw, out, w, h = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+a = np.fromfile(raw, dtype=np.uint8)
+d = a.reshape(-1, 5).astype(np.uint16)
+px = np.empty(d.shape[0] * 4, dtype=np.uint16)
+px[0::4] = (d[:, 0] << 2) | (d[:, 4] & 3)
+px[1::4] = (d[:, 1] << 2) | ((d[:, 4] >> 2) & 3)
+px[2::4] = (d[:, 2] << 2) | ((d[:, 4] >> 4) & 3)
+px[3::4] = (d[:, 3] << 2) | ((d[:, 4] >> 6) & 3)
+f = px[:w * h].reshape(h, w).astype(np.float32)
+lo, hi = np.percentile(f, 1), np.percentile(f, 99.5)
+g = np.clip((f - lo) / max(1.0, hi - lo), 0, 1)
+img = (g * 255).astype(np.uint8)
+with open(out, "wb") as fh:
+    fh.write(b"P5\n%d %d\n255\n" % (w, h) + img.tobytes())
+print("giulia-cam: wrote %s (%dx%d, min=%d max=%d mean=%.1f)"
+      % (out, w, h, f.min(), f.max(), f.mean()))
+PY
