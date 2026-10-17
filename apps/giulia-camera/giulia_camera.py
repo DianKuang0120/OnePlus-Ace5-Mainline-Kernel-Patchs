@@ -38,6 +38,8 @@ MODES = [("8 MP  (3280x2464)", 3280, 2464),
 EXP_DEFAULT = 320
 GAIN_DEFAULT = 120
 BLACK_LEVEL = 64.0
+EXP_MIN, EXP_MAX = 4, 16000
+GAIN_MIN, GAIN_MAX = 0, 960
 BLACK_LIFT = 0.02         # tiny black point lift, keeps blacks black
 
 
@@ -275,6 +277,7 @@ class Capture(QThread):
         self.proc = None
         self.wb_gains = np.ones(3, np.float32)
         self.recent = []
+        self.prev = None
 
     @staticmethod
     def denoise_preview(rgb, chroma=0.8):
@@ -332,7 +335,7 @@ class Capture(QThread):
                 self.recent.pop(0)
 
             # ---- preview: half-res RGB from the four Bayer phases ----
-            rgb = quick_preview(px, self.w, self.h, 4)
+            rgb = quick_preview(px, self.w, self.h, 8)
             if self.auto_wb:
                 m = rgb.reshape(-1, 3).mean(axis=0)
                 target = np.clip(m.mean() / np.maximum(m, 1e-6), 0.5, 2.0)
@@ -342,27 +345,39 @@ class Capture(QThread):
             hi = np.percentile(rgb, 99.7) or 1.0
             x = shadow_desat(np.clip(rgb / hi, 0, 1))
             x = np.clip((x - BLACK_LIFT) / (1.0 - BLACK_LIFT), 0, 1)
+            # temporal blend: cheap, very effective noise removal on a
+            # preview; costs a little motion smear but the sensor only
+            # manages ~8-20 fps at 8 MP anyway
+            if self.prev is not None and self.prev.shape == x.shape:
+                x = 0.45 * x + 0.55 * self.prev
+            self.prev = x
             img = rgb_to_qimage((x ** (1 / 2.2)) * 255.0)
             self.preview.emit(img)
             self.raw_frame.emit(px)
 
             # ---- auto exposure on a 95th-percentile meter ----
             ae_tick += 1
-            if self.auto_exp and ae_tick % 4 == 0:
+            if self.auto_exp and ae_tick % 2 == 0:
                 level = float(np.percentile(px[::4, ::4], 95))
                 if level > 0:
                     err = 620.0 / level
-                    if err > 1.12 or err < 0.89:
-                        if 0.5 < err < 2.0:
-                            # exposure first (noise free), gain only at its limit
-                            if err < 1.0:
-                                self.exp = max(1, int(self.exp * 0.9))
-                            elif self.exp < 6000:
-                                self.exp = min(6000, int(self.exp * 1.12) + 1)
+                    if err > 1.08 or err < 0.92:
+                        # bounded step: never stall on a large error
+                        step = min(max(err, 0.35), 2.0)
+                        # exposure first (noise free), gain only at its limit
+                        if step > 1.0:
+                            if self.exp < EXP_MAX:
+                                self.exp = min(EXP_MAX, int(self.exp * step) + 1)
                             else:
-                                self.gain = min(960, int(self.gain * 1.12) + 1)
-                            set_ctrl(self.subdev, exposure=self.exp,
-                                     analogue_gain=self.gain)
+                                self.gain = min(GAIN_MAX,
+                                                int(self.gain * step) + 1)
+                        else:
+                            if self.gain > GAIN_DEFAULT:
+                                self.gain = max(GAIN_DEFAULT, int(self.gain * step))
+                            else:
+                                self.exp = max(EXP_MIN, int(self.exp * step))
+                        set_ctrl(self.subdev, exposure=self.exp,
+                                 analogue_gain=self.gain)
             if time.time() - fps_t >= 1.0:
                 self.stats.emit("%d fps   exposure %d   gain %d   %dx%d"
                                 % (fps_n, self.exp, self.gain, self.w, self.h))
