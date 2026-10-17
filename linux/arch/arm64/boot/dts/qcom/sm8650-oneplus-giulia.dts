@@ -810,6 +810,7 @@
 
 		port@1 {
 			csiphy1_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
 				data-lanes = <0 1 2>;
 				remote-endpoint = <&imx906_ep>;
 			};

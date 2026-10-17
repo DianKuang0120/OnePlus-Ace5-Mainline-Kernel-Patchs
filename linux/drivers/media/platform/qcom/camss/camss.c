@@ -4774,6 +4774,11 @@ static int camss_parse_endpoint_node(struct device *dev,
 	csd->interface.csi2.is_cphy = (vep.bus_type == V4L2_MBUS_CSI2_CPHY);
 
 	mipi_csi2 = &vep.bus.mipi_csi2;
+	dev_info(dev, "camss: sensor endpoint bus_type=%d -> is_cphy=%d, lanes=%u\n",
+		 vep.bus_type, csd->interface.csi2.is_cphy,
+		 mipi_csi2->num_data_lanes);
+
+	mipi_csi2 = &vep.bus.mipi_csi2;
 	lncfg->clk.pos = mipi_csi2->clock_lane;
 	lncfg->clk.pol = mipi_csi2->lane_polarities[0];
 	lncfg->num_data = mipi_csi2->num_data_lanes;
