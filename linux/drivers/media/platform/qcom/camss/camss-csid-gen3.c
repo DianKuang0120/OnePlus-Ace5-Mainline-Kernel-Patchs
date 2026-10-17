@@ -277,6 +277,11 @@ static irqreturn_t csid_isr(int irq, void *dev)
 
 	val = readl(csid->base + CSID_CSI2_RX_IRQ_STATUS);
 	writel(val, csid->base + CSID_CSI2_RX_IRQ_CLEAR);
+	if (val && csid->phy.is_cphy && csid->rx_irq_dbg < 20) {
+		dev_info(csid->camss->dev, "csid%d RX_IRQ_STATUS=0x%08x\n",
+			 csid->id, val);
+		csid->rx_irq_dbg++;
+	}
 
 	buf_done_val = readl(csid->base + CSID_BUF_DONE_IRQ_STATUS);
 	writel(buf_done_val, csid->base + CSID_BUF_DONE_IRQ_CLEAR);
@@ -291,6 +296,11 @@ static irqreturn_t csid_isr(int irq, void *dev)
 				/* clear the reg update bit */
 				csid_subdev_reg_update(csid, i, true);
 
+			if (csid->phy.is_cphy && i == 0 && csid->rdi_irq_dbg < 20 && val) {
+				dev_info(csid->camss->dev,
+					 "csid%d RDI0_IRQ_STATUS=0x%08x\n", csid->id, val);
+				csid->rdi_irq_dbg++;
+			}
 			if (buf_done_val & BIT(BUF_DONE_IRQ_STATUS_RDI_OFFSET + i)) {
 				/*
 				 * For Titan Gen3, bus done and RUP IRQ have been moved to

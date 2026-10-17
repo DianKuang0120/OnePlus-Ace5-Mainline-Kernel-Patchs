@@ -74,6 +74,7 @@ struct csid_phy_config {
 	bool is_cphy;
 };
 
+
 struct csid_device;
 
 struct csid_hw_ops {
@@ -169,6 +170,8 @@ struct csid_device {
 	struct v4l2_ctrl_handler ctrls;
 	struct v4l2_ctrl *testgen_mode;
 	const struct csid_subdev_resources *res;
+	unsigned int rx_irq_dbg;
+	unsigned int rdi_irq_dbg;
 };
 
 struct camss_subdev_resources;
