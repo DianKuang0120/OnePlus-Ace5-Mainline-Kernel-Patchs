@@ -183,6 +183,22 @@ def demosaic(px, w, h):
                      box_fill(np.where(bmask, f, 0), bmask, h, w)], -1)
 
 
+def denoise(rgb, chroma=0.9, luma=0.35):
+    """3x3 box smoothing: heavy on chroma, light on luma."""
+    def box(a):
+        p = np.pad(a, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        out = np.zeros_like(a)
+        for dy in range(3):
+            for dx in range(3):
+                out += p[dy:dy + a.shape[0], dx:dx + a.shape[1]]
+        return out / 9.0
+    y = rgb.mean(axis=2, keepdims=True)
+    c = rgb - y
+    c = (1.0 - chroma) * c + chroma * box(c)
+    y = (1.0 - luma) * y + luma * box(y)
+    return np.clip(y + c, 0, None)
+
+
 def awb(rgb):
     m = rgb.reshape(-1, 3).mean(axis=0)
     return rgb * np.clip(m.mean() / np.maximum(m, 1e-6), 0.5, 2.0)
@@ -235,6 +251,18 @@ class Capture(QThread):
         self.proc = None
         self.wb_gains = np.ones(3, np.float32)
 
+    @staticmethod
+    def denoise_preview(rgb, chroma=0.8):
+        y = rgb.mean(axis=2, keepdims=True)
+        c = rgb - y
+        p = np.pad(c, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        acc = np.zeros_like(c)
+        for dy in range(3):
+            for dx in range(3):
+                acc += p[dy:dy + c.shape[0], dx:dx + c.shape[1]]
+        b = acc / 9.0
+        return (1.0 - chroma) * c + chroma * b + y
+
     def stop(self):
         self.running = False
         if self.proc:
@@ -281,6 +309,7 @@ class Capture(QThread):
                 m = rgb.reshape(-1, 3).mean(axis=0)
                 target = np.clip(m.mean() / np.maximum(m, 1e-6), 0.5, 2.0)
                 self.wb_gains = 0.85 * self.wb_gains + 0.15 * target
+            rgb = self.denoise_preview(rgb)
             rgb = rgb * self.wb_gains
             hi = np.percentile(rgb, 99.7) or 1.0
             img = rgb_to_qimage((np.clip(rgb / hi, 0, 1) ** (1 / 2.2)) * 255.0)
@@ -295,8 +324,11 @@ class Capture(QThread):
                     err = 620.0 / level
                     if err > 1.12 or err < 0.89:
                         if 0.5 < err < 2.0:
+                            # exposure first (noise free), gain only at its limit
                             if err < 1.0:
-                                self.gain = max(64, int(self.gain * 0.92))
+                                self.exp = max(1, int(self.exp * 0.9))
+                            elif self.exp < 2600:
+                                self.exp = min(2600, int(self.exp * 1.12) + 1)
                             else:
                                 self.gain = min(960, int(self.gain * 1.12) + 1)
                             set_ctrl(self.subdev, exposure=self.exp,
@@ -329,6 +361,7 @@ class SaveStill(QThread):
     def run(self):
         try:
             rgb = demosaic(self.px, self.w, self.h)
+            rgb = denoise(rgb)
             rgb = awb(rgb)
             rgb8 = (srgb(rgb) * 255.0 + 0.5).astype(np.uint8)
             os.makedirs(self.outdir, exist_ok=True)

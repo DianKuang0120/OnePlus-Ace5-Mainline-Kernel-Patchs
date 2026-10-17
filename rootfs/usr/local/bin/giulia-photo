@@ -90,6 +90,34 @@ def ctrl_range(subdev, name):
     return None, None
 
 
+def set_blanking(subdev, lines):
+    """Raise the vertical blanking so the sensor can integrate for longer."""
+    lo, hi = ctrl_range(subdev, "vertical_blanking")
+    if not hi:
+        return
+    v = max(lo, min(hi, lines))
+    set_ctrl(subdev, vertical_blanking=v)
+    return v
+
+
+def denoise(rgb, chroma=0.9, luma=0.35):
+    """3x3 box smoothing: heavy on chroma, light on luma (keeps edges decent)."""
+    def box(a):
+        p = np.pad(a, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        out = np.zeros_like(a)
+        for dy in range(3):
+            for dx in range(3):
+                out += p[dy:dy + a.shape[0], dx:dx + a.shape[1]]
+        return out / 9.0
+
+    y = rgb.mean(axis=2, keepdims=True)
+    c = rgb - y
+    c = (1.0 - chroma) * c + chroma * box(c)
+    yb = box(y)
+    y = (1.0 - luma) * y + luma * yb
+    return np.clip(y + c, 0, None)
+
+
 def set_ctrl(subdev, **vals):
     args = ["v4l2-ctl", "-d", subdev]
     for k, v in vals.items():
@@ -237,6 +265,12 @@ def main():
 
     setup_pipeline(sensor, w, h)
 
+    # A still does not need 30 fps: trade frame rate for light so the AE can
+    # use a long exposure instead of cranking the analogue gain (less noise).
+    blank = set_blanking(subdev, 16000)
+    if blank:
+        print("giulia-photo: vertical blanking %d lines (long exposure)" % blank)
+
     exp_lo, exp_hi = ctrl_range(subdev, "exposure")
     gain_lo, gain_hi = ctrl_range(subdev, "analogue_gain")
     exp_lo = 1 if exp_lo is None else exp_lo
@@ -244,8 +278,8 @@ def main():
     gain_lo = 0 if gain_lo is None else gain_lo
     gain_hi = 960 if gain_hi is None else gain_hi
 
-    exp = args.exp if args.exp is not None else max(exp_lo, exp_hi // 16)
-    gain = args.gain if args.gain is not None else max(gain_lo, gain_hi // 8)
+    exp = args.exp if args.exp is not None else exp_hi
+    gain = args.gain if args.gain is not None else gain_lo
 
     raw = args.raw or "/tmp/giulia-photo.raw"
     iters = 1 if args.no_ae else args.frames
@@ -276,19 +310,23 @@ def main():
         err = target / mean
         if 0.8 < err < 1.25:
             break
+        # Camera logic: move the exposure first (it costs no noise), and only
+        # fall back to the analogue gain when the exposure is already at its
+        # limit.
         if err < 1.0:
-            if gain > gain_lo + max(1, (gain_hi - gain_lo) // 16):
-                gain = max(gain_lo, int(gain * max(err, 0.5)))
-            else:
+            if exp > exp_lo + max(1, (exp_hi - exp_lo) // 16):
                 exp = max(exp_lo, int(exp * max(err, 0.5)))
-        else:
-            if gain < gain_hi // 2:
-                gain = min(gain_hi, int(gain * min(err, 2.0)) + 1)
             else:
+                gain = max(gain_lo, int(gain * max(err, 0.5)))
+        else:
+            if exp < exp_hi:
                 exp = min(exp_hi, int(exp * min(err, 2.0)) + 1)
+            else:
+                gain = min(gain_hi, int(gain * min(err, 2.0)) + 1)
 
     print("giulia-photo: final exposure=%d gain=%d" % (exp, gain))
     rgb = debayer_rggb(best, w, h)
+    rgb = denoise(rgb)
     rgb = awb_greyworld(rgb)
     rgb8 = (to_srgb(rgb) * 255.0 + 0.5).astype(np.uint8)
     write_png(args.output, rgb8)
