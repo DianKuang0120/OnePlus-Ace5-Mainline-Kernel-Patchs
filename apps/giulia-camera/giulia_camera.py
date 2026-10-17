@@ -36,7 +36,8 @@ MODES = [("8 MP  (3280x2464)", 3280, 2464),
          ("2 MP  (1640x1232)", 1640, 1232),
          ("SVGA  (820x616)", 820, 616)]
 EXP_DEFAULT = 320
-GAIN_DEFAULT = 320
+GAIN_DEFAULT = 120
+BLACK_LEVEL = 64.0
 
 
 # --------------------------------------------------------------------------
@@ -90,6 +91,15 @@ def ctrl_range(subdev, name, fallback=(1, 0xffff)):
             d = dict(tok.split("=", 1) for tok in line.split() if "=" in tok)
             return int(d.get("min", "0")), int(d.get("max", "0"))
     return fallback
+
+
+def set_blanking(subdev, lines):
+    lo, hi = ctrl_range(subdev, "vertical_blanking")
+    if not hi:
+        return None
+    v = max(lo, min(hi, lines))
+    set_ctrl(subdev, vertical_blanking=v)
+    return v
 
 
 def set_ctrl(subdev, **vals):
@@ -311,6 +321,7 @@ class Capture(QThread):
                 self.wb_gains = 0.85 * self.wb_gains + 0.15 * target
             rgb = self.denoise_preview(rgb)
             rgb = rgb * self.wb_gains
+            rgb = np.clip(rgb - BLACK_LEVEL, 0, None)
             hi = np.percentile(rgb, 99.7) or 1.0
             img = rgb_to_qimage((np.clip(rgb / hi, 0, 1) ** (1 / 2.2)) * 255.0)
             self.preview.emit(img)
@@ -327,8 +338,8 @@ class Capture(QThread):
                             # exposure first (noise free), gain only at its limit
                             if err < 1.0:
                                 self.exp = max(1, int(self.exp * 0.9))
-                            elif self.exp < 2600:
-                                self.exp = min(2600, int(self.exp * 1.12) + 1)
+                            elif self.exp < 6000:
+                                self.exp = min(6000, int(self.exp * 1.12) + 1)
                             else:
                                 self.gain = min(960, int(self.gain * 1.12) + 1)
                             set_ctrl(self.subdev, exposure=self.exp,
@@ -421,6 +432,9 @@ class MainWindow(QMainWindow):
 
         w, h = MODES[0][1], MODES[0][2]
         setup_pipeline(self.sensor, w, h)
+        # ~3000 extra blanking lines: preview drops to ~20 fps but the sensor
+        # can integrate ~2x longer, which matters a lot in dim rooms
+        set_blanking(self.subdev, 3000)
 
         self.exp_lo, self.exp_hi = ctrl_range(self.subdev, "exposure")
         self.gain_lo, self.gain_hi = ctrl_range(self.subdev, "analogue_gain",
@@ -456,6 +470,9 @@ class MainWindow(QMainWindow):
         self.gain.setRange(self.gain_lo, self.gain_hi)
         self.gain.setValue(GAIN_DEFAULT)
         bar.addWidget(self.gain, 1)
+
+        self.exp.valueChanged.connect(self.on_exp_slider)
+        self.gain.valueChanged.connect(self.on_gain_slider)
 
         self.ae = QCheckBox("自动曝光")
         self.ae.setChecked(True)
@@ -497,17 +514,27 @@ class MainWindow(QMainWindow):
         self.preview.setText("switching mode...")
         self.start_capture()
 
+    def on_exp_slider(self, v):
+        if self.cap and not self.ae.isChecked():
+            self.cap.exp = v
+            set_ctrl(self.subdev, exposure=v)
+
+    def on_gain_slider(self, v):
+        if self.cap and not self.ae.isChecked():
+            self.cap.gain = v
+            set_ctrl(self.subdev, analogue_gain=v)
+
     def on_frame(self, px):
         self.last_px = px
         if self.cap:
             self.cap.auto_exp = self.ae.isChecked()
             self.cap.auto_wb = self.awb.isChecked()
-            self.exp.blockSignals(True)
-            self.gain.blockSignals(True)
-            self.exp.setValue(min(self.exp.maximum(), self.cap.exp))
-            self.gain.setValue(min(self.gain.maximum(), self.cap.gain))
-            self.exp.blockSignals(False)
-            self.gain.blockSignals(False)
+            # only mirror the AE's own values back, never fight the user
+            if self.ae.isChecked():
+                for wdg, val in ((self.exp, self.cap.exp), (self.gain, self.cap.gain)):
+                    wdg.blockSignals(True)
+                    wdg.setValue(min(wdg.maximum(), val))
+                    wdg.blockSignals(False)
 
     def on_failed(self, msg):
         self.preview.setText("camera error: " + msg)
