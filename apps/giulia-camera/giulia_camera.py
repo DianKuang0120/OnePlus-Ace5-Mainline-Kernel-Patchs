@@ -112,6 +112,36 @@ def unpack_raw10(buf, w, h):
     return px[:w * h].reshape(h, w)
 
 
+def get_v4l2_format(video):
+    """Return (bytes_per_line, size_image) for the current format."""
+    import re as _re
+    out = shell(["v4l2-ctl", "-d", video, "--get-fmt-video"]).stdout
+    bpl = _re.search(r"Bytes per Line\s*:\s*(\d+)", out)
+    size = _re.search(r"Size Image\s*:\s*(\d+)", out)
+    return (int(bpl.group(1)) if bpl else 0,
+            int(size.group(1)) if size else 0)
+
+
+def unpack_frame(buf, w, h, bpl):
+    """Unpack a (possibly padded) 10-bit Bayer packed frame."""
+    stride_bytes = w * 10 // 8
+    if bpl < stride_bytes:
+        bpl = stride_bytes
+    if len(buf) < bpl * h:
+        return None
+    a = np.frombuffer(buf[:bpl * h], dtype=np.uint8).reshape(h, bpl)[:, :stride_bytes]
+    n5 = stride_bytes // 5
+    if n5 * 5 != stride_bytes:
+        return None
+    d = a[:, :n5 * 5].reshape(h, n5, 5).astype(np.uint16)
+    px = np.empty((h, n5 * 4), dtype=np.uint16)
+    px[:, 0::4] = (d[:, :, 0] << 2) | (d[:, :, 4] & 3)
+    px[:, 1::4] = (d[:, :, 1] << 2) | ((d[:, :, 4] >> 2) & 3)
+    px[:, 2::4] = (d[:, :, 2] << 2) | ((d[:, :, 4] >> 4) & 3)
+    px[:, 3::4] = (d[:, :, 3] << 2) | ((d[:, :, 4] >> 6) & 3)
+    return px[:, :w]
+
+
 def quick_preview(px, w, h, scale=4):
     """Half-resolution RGB straight from the four Bayer phases (fast)."""
     r = px[0::2, 0::2].astype(np.float32)
@@ -216,7 +246,10 @@ class Capture(QThread):
         shell(["v4l2-ctl", "-d", self.video,
                "--set-fmt-video=width=%d,height=%d,pixelformat=pRAA"
                % (self.w, self.h)])
-        size = self.w * self.h * 10 // 8
+        bpl, size = get_v4l2_format(self.video)
+        if not size:
+            size = self.w * self.h * 10 // 8
+        self.bpl = bpl
         cmd = ["v4l2-ctl", "-d", self.video, "--stream-mmap",
                "--stream-count=1000000", "--stream-to=/dev/stdout"]
         try:
@@ -236,7 +269,7 @@ class Capture(QThread):
                 if self.running:
                     self.failed.emit("stream ended (check dmesg)")
                 break
-            px = unpack_raw10(data, self.w, self.h)
+            px = unpack_frame(data, self.w, self.h, self.bpl)
             if px is None:
                 continue
             self.frames += 1

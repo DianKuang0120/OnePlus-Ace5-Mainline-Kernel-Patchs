@@ -128,6 +128,36 @@ def unpack_raw10(path):
     return px
 
 
+def get_v4l2_format(video):
+    """Return (bytes_per_line, size_image) for the current format."""
+    import re as _re
+    out = run(["v4l2-ctl", "-d", video, "--get-fmt-video"]).stdout
+    bpl = _re.search(r"Bytes per Line\s*:\s*(\d+)", out)
+    size = _re.search(r"Size Image\s*:\s*(\d+)", out)
+    return (int(bpl.group(1)) if bpl else 0,
+            int(size.group(1)) if size else 0)
+
+
+def unpack_frame(buf, w, h, bpl):
+    """Unpack a (possibly padded) 10-bit Bayer packed frame."""
+    stride_bytes = w * 10 // 8
+    if bpl < stride_bytes:
+        bpl = stride_bytes
+    if len(buf) < bpl * h:
+        return None
+    a = np.frombuffer(buf[:bpl * h], dtype=np.uint8).reshape(h, bpl)[:, :stride_bytes]
+    n5 = stride_bytes // 5
+    if n5 * 5 != stride_bytes:
+        return None
+    d = a[:, :n5 * 5].reshape(h, n5, 5).astype(np.uint16)
+    px = np.empty((h, n5 * 4), dtype=np.uint16)
+    px[:, 0::4] = (d[:, :, 0] << 2) | (d[:, :, 4] & 3)
+    px[:, 1::4] = (d[:, :, 1] << 2) | ((d[:, :, 4] >> 2) & 3)
+    px[:, 2::4] = (d[:, :, 2] << 2) | ((d[:, :, 4] >> 4) & 3)
+    px[:, 3::4] = (d[:, :, 3] << 2) | ((d[:, :, 4] >> 6) & 3)
+    return px[:, :w]
+
+
 def box_fill(values, mask, h, w):
     """Fill the unknown samples of `values` with the 3x3 average of known ones."""
     p = np.pad(values, 1)
@@ -142,7 +172,7 @@ def box_fill(values, mask, h, w):
 
 
 def debayer_rggb(px, w, h):
-    f = px[:w * h].reshape(h, w).astype(np.float32)
+    f = np.asarray(px).reshape(h, w).astype(np.float32)
 
     rmask = np.zeros((h, w), bool)
     rmask[0::2, 0::2] = True
@@ -226,10 +256,11 @@ def main():
         time.sleep(0.15)
         if not grab(video, w, h, raw):
             sys.exit("giulia-photo: capture failed (check dmesg)")
-        px = unpack_raw10(raw)
-        if px is None or len(px) < w * h:
-            sys.exit("giulia-photo: short frame (%s)" % (len(px) if px is not None else 0))
-        f = px[:w * h].astype(np.float32)
+        bpl, _ = get_v4l2_format(video)
+        px = unpack_frame(open(raw, "rb").read(), w, h, bpl)
+        if px is None or px.size < w * h:
+            sys.exit("giulia-photo: short frame (%s)" % (px.size if px is not None else 0))
+        f = px.astype(np.float32)
         # metering: use a high percentile rather than the mean, like a camera
         # spot/centre-weighted meter, so dark corners do not dominate
         level = float(np.percentile(f, 95.0))
