@@ -31,12 +31,17 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 MEDIA = "/dev/media0"
 SENSOR_PREFIX = "imx355"
 VIDEO_ENTITY = "msm_vfe0_video0"
+# Photo sizes.  The live preview always streams 1920x1080 (binned, ~30 fps,
+# much lower readout noise); picking a size here only decides what the shutter
+# switches to for the actual still.
 MODES = [("8 MP  (3280x2464)", 3280, 2464),
-         ("2 MP  (1920x1080)", 1920, 1080),
-         ("2 MP  (1640x1232)", 1640, 1232),
-         ("SVGA  (820x616)", 820, 616)]
+         ("2 MP  (1920x1080)", 1920, 1080)]
+PREVIEW_W, PREVIEW_H = 1920, 1080
+STILL_BLANK = 16000          # ~0.2 s frames while taking a photo
+PREVIEW_EXP_MAX = 2600       # keeps the preview at ~30 fps
 EXP_DEFAULT = 320
 GAIN_DEFAULT = 120
+AE_TARGET = 100.0        # mean RAW level of a well exposed frame (incl. black)
 BLACK_LEVEL = 64.0
 EXP_MIN, EXP_MAX = 4, 16000
 GAIN_MIN, GAIN_MAX = 0, 960
@@ -263,13 +268,19 @@ def rgb_to_qimage(rgb):
 class Capture(QThread):
     preview = Signal(object)      # QImage
     raw_frame = Signal(object)    # np.uint16 (h, w), latest full frame
+    still_ready = Signal(object)  # list of raw frames, still capture finished
     failed = Signal(str)
     stats = Signal(str)
 
-    def __init__(self, video, subdev, w, h, exp, gain):
+    def __init__(self, video, subdev, w, h, exp, gain,
+                 blank=None, exp_max=PREVIEW_EXP_MAX, frames_limit=0):
         super().__init__()
         self.video, self.subdev, self.w, self.h = video, subdev, w, h
         self.exp, self.gain = exp, gain
+        self.blank = blank
+        self.exp_max = exp_max
+        self.frames_limit = frames_limit
+        self.shot = frames_limit > 0
         self.auto_exp = True
         self.auto_wb = True
         self.frames = 0
@@ -280,7 +291,7 @@ class Capture(QThread):
         self.prev = None
 
     @staticmethod
-    def denoise_preview(rgb, chroma=0.8):
+    def denoise_preview(rgb, chroma=0.55):
         y = rgb.mean(axis=2, keepdims=True)
         c = rgb - y
         p = np.pad(c, ((1, 1), (1, 1), (0, 0)), mode="edge")
@@ -298,6 +309,12 @@ class Capture(QThread):
 
     def run(self):
         self.running = True
+        if self.blank:
+            set_blanking(self.subdev, self.blank)
+        _lo, _hi = ctrl_range(self.subdev, "exposure")
+        if _hi:
+            self.exp_max = min(self.exp_max, _hi)
+            self.exp = max(1, min(self.exp, self.exp_max))
         set_ctrl(self.subdev, exposure=self.exp, analogue_gain=self.gain)
         shell(["v4l2-ctl", "-d", self.video,
                "--set-fmt-video=width=%d,height=%d,pixelformat=pRAA"
@@ -333,23 +350,30 @@ class Capture(QThread):
             self.recent.append(px)
             if len(self.recent) > 4:
                 self.recent.pop(0)
+            if self.frames_limit and self.frames >= self.frames_limit:
+                self.still_ready.emit(list(self.recent))
+                break
 
             # ---- preview: half-res RGB from the four Bayer phases ----
-            rgb = quick_preview(px, self.w, self.h, 8)
+            rgb = quick_preview(px, self.w, self.h, 4)
             if self.auto_wb:
                 m = rgb.reshape(-1, 3).mean(axis=0)
                 target = np.clip(m.mean() / np.maximum(m, 1e-6), 0.5, 2.0)
                 self.wb_gains = 0.85 * self.wb_gains + 0.15 * target
             rgb = self.denoise_preview(rgb)
             rgb = rgb * self.wb_gains
-            hi = np.percentile(rgb, 99.7) or 1.0
-            x = shadow_desat(np.clip(rgb / hi, 0, 1))
-            x = np.clip((x - BLACK_LIFT) / (1.0 - BLACK_LIFT), 0, 1)
-            # temporal blend: cheap, very effective noise removal on a
-            # preview; costs a little motion smear but the sensor only
-            # manages ~8-20 fps at 8 MP anyway
+            hi = np.percentile(rgb[::2, ::2], 99.7) or 1.0
+            x = np.clip(rgb / hi, 0, 1)
+            lo = np.percentile(x[::2, ::2], 0.4)
+            x = np.clip((x - lo) / max(1e-6, 1.0 - lo), 0, 1)
+            x = shadow_desat(x)
+            # motion-adaptive temporal blend: static areas average away most
+            # of the sensor noise, moving detail switches to the new frame so
+            # there is no ghost trail
             if self.prev is not None and self.prev.shape == x.shape:
-                x = 0.45 * x + 0.55 * self.prev
+                d = np.abs(x - self.prev).mean(axis=2, keepdims=True)
+                a = np.clip(0.30 + 9.0 * d, 0.30, 1.0)
+                x = a * x + (1.0 - a) * self.prev
             self.prev = x
             img = rgb_to_qimage((x ** (1 / 2.2)) * 255.0)
             self.preview.emit(img)
@@ -357,17 +381,19 @@ class Capture(QThread):
 
             # ---- auto exposure on a 95th-percentile meter ----
             ae_tick += 1
-            if self.auto_exp and ae_tick % 2 == 0:
-                level = float(np.percentile(px[::4, ::4], 95))
+            if self.auto_exp and ae_tick % (1 if self.shot else 2) == 0:
+                # average metering: a small bright lamp in frame must not
+                # pull the exposure down for everything else
+                level = float(px[::4, ::4].mean())
                 if level > 0:
-                    err = 620.0 / level
+                    err = AE_TARGET / level
                     if err > 1.08 or err < 0.92:
                         # bounded step: never stall on a large error
                         step = min(max(err, 0.35), 2.0)
                         # exposure first (noise free), gain only at its limit
                         if step > 1.0:
-                            if self.exp < EXP_MAX:
-                                self.exp = min(EXP_MAX, int(self.exp * step) + 1)
+                            if self.exp < self.exp_max:
+                                self.exp = min(self.exp_max, int(self.exp * step) + 1)
                             else:
                                 self.gain = min(GAIN_MAX,
                                                 int(self.gain * step) + 1)
@@ -466,6 +492,8 @@ class MainWindow(QMainWindow):
         self.cap = None
         self.last_px = None
         self.saving = None
+        self.busy = False
+        self.still_wh = (PREVIEW_W, PREVIEW_H)
         self.outdir = os.path.expanduser("~/Pictures/giulia")
 
         try:
@@ -474,11 +502,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "giulia camera", str(e))
             raise SystemExit(1)
 
-        w, h = MODES[0][1], MODES[0][2]
-        setup_pipeline(self.sensor, w, h)
-        # ~3000 extra blanking lines: preview drops to ~20 fps but the sensor
-        # can integrate ~2x longer, which matters a lot in dim rooms
-        set_blanking(self.subdev, 3000)
+        setup_pipeline(self.sensor, PREVIEW_W, PREVIEW_H)
 
         self.exp_lo, self.exp_hi = ctrl_range(self.subdev, "exposure")
         self.gain_lo, self.gain_hi = ctrl_range(self.subdev, "analogue_gain",
@@ -500,7 +524,7 @@ class MainWindow(QMainWindow):
 
         self.mode = QComboBox()
         self.mode.addItems([m[0] for m in MODES])
-        self.mode.currentIndexChanged.connect(self.restart)
+        self.mode.setToolTip("照片分辨率（预览固定 1080p 以保证流畅）")
         bar.addWidget(self.mode)
 
         bar.addWidget(QLabel("曝光"))
@@ -539,12 +563,17 @@ class MainWindow(QMainWindow):
 
         self.start_capture()
 
+    def stop_capture(self):
+        if self.cap:
+            self.cap.stop()
+            self.cap.wait(2000)
+            self.cap = None
+
     def start_capture(self):
-        mi = self.mode.currentIndex()
-        w, h = MODES[mi][1], MODES[mi][2]
-        setup_pipeline(self.sensor, w, h)
-        self.cap = Capture(self.video, self.subdev, w, h,
-                           self.exp.value(), self.gain.value())
+        setup_pipeline(self.sensor, PREVIEW_W, PREVIEW_H)
+        self.cap = Capture(self.video, self.subdev, PREVIEW_W, PREVIEW_H,
+                           self.exp.value(), self.gain.value(),
+                           blank=None, exp_max=PREVIEW_EXP_MAX)
         self.cap.preview.connect(self.preview.set_image)
         self.cap.raw_frame.connect(self.on_frame)
         self.cap.stats.connect(self.status.showMessage)
@@ -552,9 +581,7 @@ class MainWindow(QMainWindow):
         self.cap.start()
 
     def restart(self):
-        if self.cap:
-            self.cap.stop()
-            self.cap.wait(2000)
+        self.stop_capture()
         self.preview.setText("switching mode...")
         self.start_capture()
 
@@ -585,27 +612,58 @@ class MainWindow(QMainWindow):
         self.status.showMessage("error: " + msg)
 
     def take_photo(self):
-        if self.last_px is None or self.saving:
+        if self.busy:
             return
+        self.busy = True
         self.shutter.setEnabled(False)
+        mi = self.mode.currentIndex()
+        w, h = MODES[mi][1], MODES[mi][2]
+        self.still_wh = (w, h)
+
+        # Same amount of light, but spend it on a long exposure instead of
+        # analogue gain: that is where the noise comes from.
+        total = 1
+        if self.cap:
+            total = max(1, self.cap.exp) * max(1, self.cap.gain)
+        exp = 16000
+        gain = int(np.clip(total / float(exp), self.gain_lo,
+                           max(self.gain_lo, self.gain_hi)))
+
+        self.status.showMessage("拍照中 %dx%d ..." % (w, h))
+        self.preview.setText("拍照中 %dx%d ..." % (w, h))
+        self.stop_capture()
+        setup_pipeline(self.sensor, w, h)
+        self.cap = Capture(self.video, self.subdev, w, h, exp, gain,
+                           blank=STILL_BLANK, exp_max=16000, frames_limit=12)
+        self.cap.still_ready.connect(self.on_still)
+        self.cap.failed.connect(self.on_failed)
+        self.cap.start()
+
+    def on_still(self, frames):
+        self.stop_capture()
+        if not frames:
+            self.on_save_failed("no frames captured")
+            return
+        w, h = self.still_wh
         self.status.showMessage("saving photo...")
-        frames = list(self.cap.recent) if self.cap and self.cap.recent else []
-        self.saving = SaveStill(frames or self.last_px.copy(),
-                                self.last_px.shape[1],
-                                self.last_px.shape[0], self.outdir)
+        self.saving = SaveStill(list(frames), w, h, self.outdir)
         self.saving.done.connect(self.on_saved)
         self.saving.failed.connect(self.on_save_failed)
         self.saving.start()
 
     def on_saved(self, path):
-        self.shutter.setEnabled(True)
         self.saving = None
+        self.busy = False
+        self.shutter.setEnabled(True)
         self.status.showMessage("saved " + path, 8000)
+        self.restart()
 
     def on_save_failed(self, msg):
-        self.shutter.setEnabled(True)
         self.saving = None
+        self.busy = False
+        self.shutter.setEnabled(True)
         self.status.showMessage("save failed: " + msg, 8000)
+        self.restart()
 
     def cleanup(self):
         if self.cap:
