@@ -1,0 +1,156 @@
+--- a/sound/soc/qcom/qdsp6/q6apm.c
++++ b/sound/soc/qcom/qdsp6/q6apm.c
+@@ -3,6 +3,7 @@
+ 
+ #include <dt-bindings/soc/qcom,gpr.h>
+ #include <linux/delay.h>
++#include <linux/firmware.h>
+ #include <linux/jiffies.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+@@ -11,6 +12,7 @@
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/soc/qcom/apr.h>
++#include <linux/unaligned.h>
+ #include <linux/wait.h>
+ #include <sound/soc.h>
+ #include <sound/soc-dapm.h>
+@@ -197,8 +199,8 @@
+ 	}
+ 
+ 	if (!module) {
+-		dev_err(graph->dev, "No SHMEM module found in graph\n");
+-		return -ENODEV;
++		dev_dbg(graph->dev, "No SHMEM module found in graph\n");
++		return 0;
+ 	}
+ 
+ 	return audioreach_set_media_format(graph, module, cfg);
+@@ -440,6 +442,104 @@
+ }
+ EXPORT_SYMBOL_GPL(q6apm_set_real_module_id);
+ 
++/*
++ * Vendor graphs (voice call, etc.) do not carry a shared memory endpoint:
++ * their data path starts inside the DSP firmware (e.g. the SAL module) and is
++ * fed by the modem, so there is no media format for the AP to program.  Such
++ * graphs must be opened as-is instead of failing the PCM open.
++ */
++static bool q6apm_graph_has_shmem_module(struct q6apm_graph *graph)
++{
++	if (q6apm_find_module_by_mid(graph, MODULE_ID_SH_MEM_PULL_MODE) ||
++	    q6apm_find_module_by_mid(graph, MODULE_ID_WR_SHARED_MEM_EP) ||
++	    q6apm_find_module_by_mid(graph, MODULE_ID_SH_MEM_PUSH_MODE) ||
++	    q6apm_find_module_by_mid(graph, MODULE_ID_RD_SHARED_MEM_EP))
++		return true;
++
++	return false;
++}
++
++/*
++ * Voice call graphs are fed by the modem through the SAL module, they have no
++ * PCM/shared-memory endpoint and none of their modules accept a media format.
++ * Device (backend) graphs never carry a SAL module, so they keep the normal
++ * format programming path.
++ */
++static bool q6apm_graph_is_voice(struct q6apm_graph *graph)
++{
++	if (q6apm_find_module_by_mid(graph, MODULE_ID_SAL) &&
++	    !q6apm_graph_has_shmem_module(graph))
++		return true;
++
++	return false;
++}
++
++static int q6apm_send_raw_module_param(struct q6apm_graph *graph, uint32_t iid,
++				       uint32_t param_id, const void *data, uint32_t len)
++{
++	struct apm_module_param_data *param_data;
++	int payload_size = APM_MODULE_PARAM_DATA_SIZE + len;
++	void *p;
++
++	struct gpr_pkt *pkt __free(kfree) = audioreach_alloc_apm_cmd_pkt(payload_size,
++						APM_CMD_SET_CFG, 0);
++	if (IS_ERR(pkt))
++		return -ENOMEM;
++
++	p = (void *)pkt + GPR_HDR_SIZE + APM_CMD_HDR_SIZE;
++
++	param_data = p;
++	param_data->module_instance_id = iid;
++	param_data->error_code = 0;
++	param_data->param_id = param_id;
++	param_data->param_size = len;
++
++	p += APM_MODULE_PARAM_DATA_SIZE;
++	memcpy(p, data, len);
++
++	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
++}
++
++/* "APMP": optional magic for the raw module parameter file */
++#define Q6APM_FW_PARAM_MAGIC	0x504d5041
++
++/*
++ * Apply raw vendor module parameters from
++ * /lib/firmware/qcom/apm-g<graph-id>-params.bin.
++ * Records: [u32 instance-id][u32 param-id][u32 len][data, 4 byte aligned].
++ */
++static void q6apm_apply_fw_module_params(struct q6apm_graph *graph)
++{
++	char fwname[64];
++	const struct firmware *fw;
++	const u8 *buf;
++	size_t off = 0;
++
++	snprintf(fwname, sizeof(fwname), "qcom/apm-g%d-params.bin", graph->id);
++	if (request_firmware(&fw, fwname, graph->dev))
++		return;
++
++	buf = fw->data;
++	if (fw->size >= 4 && get_unaligned_le32(buf) == Q6APM_FW_PARAM_MAGIC)
++		off = 4;
++
++	while (off + 12 <= fw->size) {
++		u32 iid = get_unaligned_le32(buf + off);
++		u32 pid = get_unaligned_le32(buf + off + 4);
++		u32 len = get_unaligned_le32(buf + off + 8);
++
++		if (off + 12 + len > fw->size)
++			break;
++
++		dev_dbg(graph->dev, "graph %d: set param 0x%x on iid 0x%x (%u bytes)\n",
++			graph->id, pid, iid, len);
++		q6apm_send_raw_module_param(graph, iid, pid, buf + off + 12, len);
++		off += 12 + ALIGN(len, 4);
++	}
++
++	release_firmware(fw);
++}
++
+ int q6apm_graph_media_format_pcm(struct q6apm_graph *graph, struct audioreach_module_config *cfg)
+ {
+ 	struct audioreach_graph_info *info = graph->info;
+@@ -447,6 +547,11 @@
+ 	struct audioreach_container *container;
+ 	struct audioreach_module *module;
+ 	int ret;
++
++	if (q6apm_graph_is_voice(graph)) {
++		dev_dbg(graph->dev, "voice graph, skipping media format\n");
++		return 0;
++	}
+ 
+ 	list_for_each_entry(sgs, &info->sg_list, node) {
+ 		list_for_each_entry(container, &sgs->container_list, node) {
+@@ -769,6 +874,9 @@
+ 		ret = PTR_ERR(graph->port);
+ 		goto free_graph;
+ 	}
++
++	/* optional vendor module parameters (e.g. voice call VSID) */
++	q6apm_apply_fw_module_params(graph);
+ 
+ 	return graph;
+ 
