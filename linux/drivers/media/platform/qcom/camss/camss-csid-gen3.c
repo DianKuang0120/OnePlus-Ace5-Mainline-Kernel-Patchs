@@ -131,6 +131,10 @@ static void __csid_configure_rx(struct csid_device *csid,
 	}
 
 	writel(val, csid->base + CSID_CSI2_RX_CFG0);
+	dev_info(csid->camss->dev,
+		 "csid%d rx_cfg0 wrote=0x%08x read=0x%08x (is_cphy=%d lanes=%u assign=0x%x csiphy=%u)\n",
+		 csid->id, val, readl(csid->base + CSID_CSI2_RX_CFG0),
+		 phy->is_cphy, phy->lane_cnt, phy->lane_assign, phy->csiphy_id);
 
 	val = CSI2_RX_CFG1_ECC_CORRECTION_EN;
 	if (vc > 3)

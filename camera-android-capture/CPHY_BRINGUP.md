@@ -190,3 +190,27 @@ above should show exactly which register still differs.
 * CSIPHY register reads are printed by the driver itself
   (`csiphy_lanes_enable` / `csiphy_lanes_disable`); with camss built in,
   `/dev/mem` is blocked, so the driver is the way to see them.
+
+## Latest: the CSID PHY-type bit, and where it now stands
+
+`camss-csid-gen3.c` never set `CSI2_RX_CFG0_PHY_TYPE_SEL` (bit 24) - the OPLUS
+IFE CSID tables have `.phy_type_shift = 24` and write
+`lane_type << phy_type_shift`, and mainline's own gen2/340/680 CSID drivers
+define the same bit.  The gen3 driver omitted it, so the CSID decoded a C-PHY
+stream as D-PHY.
+
+Fixed (b006549): `struct csid_phy_config` gained `is_cphy`, `camss-csid.c`
+fills it from the CSIPHY config, and `__csid_configure_rx()` sets bit 24.
+Verified on the target:
+
+```
+csid0 rx_cfg0 wrote=0x01202102 read=0x01202102 (is_cphy=1 lanes=3 assign=0x210 csiphy=1)
+```
+
+bit 24 is set, lane count and assignment match the vendor (`lane_assign 0x210`),
+and the CSIPHY registers still match the vendor dump register for register.
+
+**Still no frame.**  Everything on the receive path that can be compared with
+the vendor now agrees, so the next step is the same technique one stage
+further up - read the vendor's CSID/IFE registers on stock Android (the OPLUS
+driver has an `ife` debugfs directory) and diff those, then the VFE/RDI config.
