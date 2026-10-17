@@ -57,34 +57,81 @@ lane_en 0x1014=0x2a   0x02f0=0xef  0x0264=0x01  0x0244=0xb2  0x02bc=0xd0
 ## Where it stands
 
 The pipeline starts (STREAMON succeeds, the sensor's init and stream-on tables
-go out, CSI_SIGNALING_MODE reads back 0x03 = C-PHY, lane count 0x02 = 3 trios)
-but **the CSIPHY sees no activity at all**:
+go out) and the C-PHY receiver now matches the OPLUS tables register for
+register:
+
+```
+ctrl0=0x0e  lane_en 0x1014=0x2a  0x101c=0x7a  0x1018=0x01  0x1084=0  0x108c=1
+AFE: 0x0268=0xf1 0x0278=0x14 0x0288=0x20 0x026c=0x2d 0x028c=0x37 0x0270=3 0x020c=0x23
+3ph: 0x02f0=0xef 0x0264=1 0x0244=0xb2 0x02bc=0xd0 0x0260=0xa8
+```
+
+and the **sensor is confirmed alive and streaming**:
+
+```
+after stream-on: chipid=0x0906(rc0) 0x0100=0x01(rc0) 0x0111=0x03(rc0)
+```
+
+but the CSIPHY still reports **no activity at all** - both right after the lane
+configuration and again at stream stop:
 
 ```
 status 0x0340=0  lanes 0x0358=0 0x0758=0 0x0b58=0  common_status 0x10b0=0
 ```
 
-Zero on every status/error register, read both right after the lane config and
-again at stream stop.  That points at the *transmitter* rather than the
-receiver (a mis-settled receiver would normally raise errors, not stay silent).
+A receiver that is merely mis-tuned normally raises errors here, so a
+completely silent PHY with a live transmitter is the thing to explain.
 
-## Next steps
+### Two more register values that were wrong (423fb06)
 
-1. **Confirm the AFE writes landed** - the stream-stop dump does not include
-   0x0268/0x0278/0x0288/0x026C/0x028C or 0x020C yet; add them.
-2. **Prove whether the sensor transmits.** The sensor's own state can be read
-   back over CCI (0x0100 should be 1).  A cheap cross-check: put the imx355's
-   *known-good* D-PHY link through the same exercise with the 2ph data-rate
-   AFE table - if D-PHY + AFE works there, the PHY side is fine.
-3. **D-PHY is worth one more try with the AFE registers.** The earlier D-PHY
-   attempts (0x0111 = 0x02, 3 and 4 lanes) predate the data-rate tables and
-   therefore ran the PHY without its front-end tuning.
-4. **Re-capture the CCI stream** if the sensor turns out to be silent - the
-   per-frame AE region of the old capture is the least trustworthy part of the
-   table, and the QSC/OTP blobs were deliberately skipped.
-5. The CSID has no C-PHY handling in mainline (only C-PHY packet/error
-   counters in the OPLUS driver), so it is a suspect only once the PHY reports
-   activity.
+Comparing `csiphy_common_reg_2_2_0` with what mainline writes:
+
+| register | OPLUS (C-PHY) | mainline was | now |
+|---|---|---|---|
+| CTRL0 (0x1000) | 0x0e (reset-exit) | written 0x00 in lanes_enable, undoing it | 0x0e |
+| CTRL7 (0x101c) | 0x7a | 0x02 (the D-PHY value) | 0x7a |
+| CTRL6 (0x1018) | 0x01 | 0x01 | ok |
+| 0x1084 / 0x108c | 0x00 / 0x01 | added | ok |
+
+## The decisive next step: read the vendor's PHY registers
+
+The OPLUS csiphy driver can dump its own registers, and it is exposed through
+debugfs:
+
+```c
+debugfs_create_bool("en_common_status_reg_dump", 0644, ...)
+```
+
+so on stock Android (root adb) one can
+
+```sh
+find /sys/kernel/debug -name 'en_*status_reg_dump'
+echo 1 > .../en_common_status_reg_dump
+echo 1 > .../en_lane_status_reg_dump      # if present on this revision
+# open the main camera, then
+dmesg | grep -i csiphy
+```
+
+and get the PHY's own view of itself while a working link runs.  Diffing that
+against the values printed by `csiphy_lanes_enable()`/`_disable()` in mainline
+above should show exactly which register still differs.
+
+## Other hypotheses, in order
+
+1. **Something in the PHY is not programmed at all** - the OPLUS driver writes
+   several more tables (`csiphy_irq_reg`, `bist_setting`, the per-phy
+   `csiphy_v2_2_0` block).  The debugfs dump answers this directly.
+2. **C-PHY trio line order.** The video-interfaces binding encodes ABC/ACB/...
+   through `lane-polarities`; the DT has none, so mainline assumes ABC.  The
+   OPLUS HAL passes the order explicitly.
+3. **PHY clock rate.** `csiphy_set_clock_rates()` now lists 400/480/560/640/800
+   MHz and asks for 480 (the vendor's nominal); worth logging the value that
+   `clk_set_rate()` actually lands on.
+4. **The transmitter is quiet after all.** Reading 0x0100 back only proves the
+   mode register; the vendor's stream-on block ends with `0x0b8e..0x0b95`
+   (0x01 0x00 0x02 0x1e 0x01 0xfa 0x01 0x00) which we replay verbatim, and the
+   `0x0301` write reads back 0x05 rather than the written 0x25 - worth a second
+   look at the capture for that block.
 
 ## Useful artefacts
 
