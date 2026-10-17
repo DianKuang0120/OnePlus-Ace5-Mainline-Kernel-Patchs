@@ -1320,11 +1320,20 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	writel_relaxed(val, csiphy->base +
 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 6));
 
-	val = 0x02;
+	/*
+	 * The OPLUS common table writes 0x7a here; mainline's generic 0x02 is
+	 * the D-PHY value (it works for the D-PHY sensor on the same SoC).
+	 */
+	val = (cfg->csi2 && cfg->csi2->is_cphy) ? 0x7a : 0x02;
 	writel_relaxed(val, csiphy->base +
 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 7));
 
-	val = 0x00;
+	/*
+	 * CTRL0 carries the reset-exit value: 0x0e for C-PHY (written by
+	 * csiphy_reset()), 0x00 for D-PHY.  Writing 0 here unconditionally
+	 * undid the C-PHY reset value straight away.
+	 */
+	val = (cfg->csi2 && cfg->csi2->is_cphy) ? 0x0e : 0x00;
 	writel_relaxed(val, csiphy->base +
 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 0));
 
@@ -1343,7 +1352,8 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	if (cfg->csi2 && cfg->csi2->is_cphy &&
 	    csiphy->camss->res->version == CAMSS_8650) {
 		dev_info(csiphy->camss->dev,
-			 "C-PHY lane_en=0x%02x ctrl 0x1004=%08x 0x1008=%08x 0x100c=%08x 0x1010=%08x 0x1018=%08x 0x101c=%08x 0x1084=%08x 0x108c=%08x\n",
+			 "C-PHY ctrl0=0x%02x lane_en=0x%02x ctrl 0x1004=%08x 0x1008=%08x 0x100c=%08x 0x1010=%08x 0x1018=%08x 0x101c=%08x 0x1084=%08x 0x108c=%08x\n",
+			 readl_relaxed(csiphy->base + 0x1000) & 0xff,
 			 readl_relaxed(csiphy->base + 0x1014) & 0xff,
 			 readl_relaxed(csiphy->base + 0x1004),
 			 readl_relaxed(csiphy->base + 0x1008),
@@ -1353,6 +1363,16 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 			 readl_relaxed(csiphy->base + 0x101c),
 			 readl_relaxed(csiphy->base + 0x1084),
 			 readl_relaxed(csiphy->base + 0x108c));
+		dev_info(csiphy->camss->dev,
+			 "C-PHY AFE: 0x0268=%08x 0x0278=%08x 0x0288=%08x 0x026c=%08x 0x028c=%08x 0x0270=%08x 0x020c=%08x 0x0208=%08x\n",
+			 readl_relaxed(csiphy->base + 0x0268),
+			 readl_relaxed(csiphy->base + 0x0278),
+			 readl_relaxed(csiphy->base + 0x0288),
+			 readl_relaxed(csiphy->base + 0x026c),
+			 readl_relaxed(csiphy->base + 0x028c),
+			 readl_relaxed(csiphy->base + 0x0270),
+			 readl_relaxed(csiphy->base + 0x020c),
+			 readl_relaxed(csiphy->base + 0x0208));
 		dev_info(csiphy->camss->dev,
 			 "C-PHY 3ph: 0x02f0=%08x 0x02f4=%08x 0x0264=%08x 0x0244=%08x 0x02bc=%08x 0x0260=%08x status 0x0340=%08x 0x0358=%08x\n",
 			 readl_relaxed(csiphy->base + 0x02f0),
