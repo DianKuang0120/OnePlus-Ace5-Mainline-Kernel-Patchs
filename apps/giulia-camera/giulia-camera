@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# launch the giulia camera app
+exec python3 "$(dirname "$(readlink -f "$0")")/giulia_camera.py" "$@"
