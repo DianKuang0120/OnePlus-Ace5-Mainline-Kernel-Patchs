@@ -59,6 +59,7 @@
 #define		RUP_DONE_IRQ_STATUS		BIT(23)
 
 #define CSID_CSI2_RDIN_IRQ_CLEAR(rdi)	(0xF4 + 0x10 * (rdi))
+#define CSID_CSI2_RDIN_IRQ_MASK(rdi)	(0xF0 + 0x10 * (rdi))
 #define CSID_CSI2_RDIN_IRQ_SET(rdi)	(0xF8 + 0x10 * (rdi))
 
 #define CSID_CSI2_RX_CFG0		0x200
@@ -337,6 +338,14 @@ static int csid_reset(struct csid_device *csid)
 	writel(1, csid->base + CSID_TOP_IRQ_CLEAR);
 	writel(1, csid->base + CSID_IRQ_CMD);
 	writel(1, csid->base + CSID_TOP_IRQ_MASK);
+	/*
+	 * Diagnostic: unmask the CSI2 RX error interrupts and the RDI path
+	 * interrupts so the ISR can log what the CSID actually sees.
+	 */
+	writel(0, csid->base + CSID_CSI2_RX_IRQ_MASK);
+	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
+		if (csid->phy.en_vc & BIT(i))
+			writel(0, csid->base + CSID_CSI2_RDIN_IRQ_MASK(i));
 
 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
 		if (csid->phy.en_vc & BIT(i)) {
