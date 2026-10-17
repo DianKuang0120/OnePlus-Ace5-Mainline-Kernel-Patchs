@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""
+giulia-photo - capture a photo from the giulia ultrawide (Sony IMX355).
+
+Unlike giulia-cam (one RAW frame, fixed exposure, PGM), this does what a camera
+app does:
+
+  * sets up the media pipeline (IMX355 -> CSIPHY0 -> CSID0 -> VFE0 RDI0)
+  * runs an auto-exposure loop over the sensor's exposure / analogue gain
+  * applies grey-world auto white balance
+  * bilinear demosaics the RGGB Bayer pattern
+  * applies a gamma curve and writes a PNG (and a JPEG if ffmpeg is installed)
+
+Usage:
+    giulia-photo [-o out.png] [-s WxH] [--frames N] [--exp N] [--gain N]
+                 [--no-ae] [--raw out.raw]
+"""
+
+import argparse
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import zlib
+
+import numpy as np
+
+MEDIA = "/dev/media0"
+SENSOR_ENTITY_PREFIX = "imx355"
+VIDEO_ENTITY = "msm_vfe0_video0"
+LINK_A, LINK_B = '"msm_csiphy0":1', '"msm_csid0":0'
+LINK_C, LINK_D = '"msm_csid0":1', '"msm_vfe0_rdi0":0'
+PADS = ['"msm_csiphy0":0', '"msm_csiphy0":1', '"msm_csid0":0',
+        '"msm_csid0":1', '"msm_vfe0_rdi0":0']
+
+
+def run(cmd, check=False):
+    return subprocess.run(cmd, check=check, capture_output=True, text=True)
+
+
+def media_ctl(*args):
+    return run(["media-ctl", "-d", MEDIA, *args])
+
+
+def find_nodes():
+    p = media_ctl("-p")
+    if p.returncode:
+        sys.exit("giulia-photo: cannot read %s (is camss loaded?)" % MEDIA)
+    sensor = video = subdev = None
+    cur = None
+    for line in p.stdout.splitlines():
+        if "entity" in line and ": " in line:
+            cur = line.split(": ", 1)[1].split(" (")[0].strip()
+        if "device node name" in line and cur:
+            node = line.rsplit(None, 1)[-1]
+            if cur.startswith(SENSOR_ENTITY_PREFIX):
+                sensor, subdev = cur, node
+            elif cur.startswith(VIDEO_ENTITY):
+                video = node
+    if not sensor or not video:
+        sys.exit("giulia-photo: IMX355 or VFE0 RDI0 not found in the media graph")
+    return sensor, subdev, video
+
+
+def setup_pipeline(sensor, w, h):
+    # CSID0 is shared with the main sensor (csiphy1); drop that link first or
+    # the CSIPHY0 -> CSID0 link cannot be enabled (EBUSY).
+    for q in ("msm_csiphy1", "msm_csiphy2", "msm_csiphy3",
+              "msm_csiphy4", "msm_csiphy5"):
+        for c in ("msm_csid0", "msm_csid1", "msm_csid2"):
+            media_ctl("-l", '"%s":1->"%s":0[0]' % (q, c))
+    media_ctl("-l", "%s->%s[1]" % (LINK_A, LINK_B))
+    media_ctl("-l", "%s->%s[1]" % (LINK_C, LINK_D))
+    for pad in ['"%s":0' % sensor] + PADS:
+        media_ctl("-V", "%s[fmt:SRGGB10_1X10/%dx%d]" % (pad, w, h))
+
+
+def ctrl_range(subdev, name):
+    out = run(["v4l2-ctl", "-d", subdev, "--list-ctrls"]).stdout
+    for line in out.splitlines():
+        if line.strip().startswith(name + " "):
+            d = {}
+            for tok in line.split():
+                if "=" in tok:
+                    k, v = tok.split("=", 1)
+                    d[k] = v
+            return int(d.get("min", "0")), int(d.get("max", "0"))
+    return None, None
+
+
+def set_ctrl(subdev, **vals):
+    args = ["v4l2-ctl", "-d", subdev]
+    for k, v in vals.items():
+        args += ["--set-ctrl", "%s=%d" % (k, v)]
+    run(args)
+
+
+def grab(video, w, h, path, timeout=8):
+    run(["v4l2-ctl", "-d", video,
+         "--set-fmt-video=width=%d,height=%d,pixelformat=pRAA" % (w, h)])
+    if os.path.exists(path):
+        os.unlink(path)
+    r = subprocess.run(["timeout", str(timeout), "v4l2-ctl", "-d", video,
+                        "--stream-mmap", "--stream-count=1",
+                        "--stream-to=%s" % path],
+                       capture_output=True, text=True)
+    ok = os.path.exists(path) and os.path.getsize(path) > 0
+    if not ok:
+        msg = (r.stderr or r.stdout or "").strip().splitlines()
+        if msg:
+            print("    capture: " + msg[-1])
+    return ok
+
+
+def unpack_raw10(path):
+    a = np.fromfile(path, dtype=np.uint8)
+    n = (len(a) // 5) * 5
+    if not n:
+        return None
+    d = a[:n].reshape(-1, 5).astype(np.uint16)
+    px = np.empty(d.shape[0] * 4, dtype=np.uint16)
+    px[0::4] = (d[:, 0] << 2) | (d[:, 4] & 3)
+    px[1::4] = (d[:, 1] << 2) | ((d[:, 4] >> 2) & 3)
+    px[2::4] = (d[:, 2] << 2) | ((d[:, 4] >> 4) & 3)
+    px[3::4] = (d[:, 3] << 2) | ((d[:, 4] >> 6) & 3)
+    return px
+
+
+def box_fill(values, mask, h, w):
+    """Fill the unknown samples of `values` with the 3x3 average of known ones."""
+    p = np.pad(values, 1)
+    pm = np.pad(mask.astype(np.float32), 1)
+    s = np.zeros((h, w), dtype=np.float32)
+    c = np.zeros((h, w), dtype=np.float32)
+    for dy in range(3):
+        for dx in range(3):
+            s += p[dy:dy + h, dx:dx + w]
+            c += pm[dy:dy + h, dx:dx + w]
+    return np.where(mask, values, s / np.maximum(c, 1.0))
+
+
+def debayer_rggb(px, w, h):
+    f = px[:w * h].reshape(h, w).astype(np.float32)
+
+    rmask = np.zeros((h, w), bool)
+    rmask[0::2, 0::2] = True
+    bmask = np.zeros((h, w), bool)
+    bmask[1::2, 1::2] = True
+    gmask = np.zeros((h, w), bool)
+    gmask[0::2, 1::2] = True
+    gmask[1::2, 0::2] = True
+
+    r = box_fill(np.where(rmask, f, 0), rmask, h, w)
+    g = box_fill(np.where(gmask, f, 0), gmask, h, w)
+    b = box_fill(np.where(bmask, f, 0), bmask, h, w)
+    return np.stack([r, g, b], axis=-1)
+
+
+def awb_greyworld(rgb):
+    means = rgb.reshape(-1, 3).mean(axis=0)
+    gains = np.clip(means.mean() / np.maximum(means, 1e-6), 0.5, 2.0)
+    return rgb * gains
+
+
+def to_srgb(rgb, gamma=2.2):
+    hi = np.percentile(rgb, 99.7)
+    x = np.clip(rgb / hi if hi > 0 else rgb, 0, 1)
+    lo = np.percentile(x, 0.5)
+    x = np.clip((x - lo) / max(1e-6, 1.0 - lo), 0, 1)
+    return np.clip(x ** (1.0 / gamma), 0, 1)
+
+
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def png_chunk(tag, data):
+    return (struct.pack(">I", len(data)) + tag + data +
+            struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+
+
+def write_png(path, rgb8):
+    h, w, _ = rgb8.shape
+    raw = b"".join(b"\x00" + rgb8[y].tobytes() for y in range(h))
+    with open(path, "wb") as fh:
+        fh.write(PNG_SIG)
+        fh.write(png_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+        fh.write(png_chunk(b"IDAT", zlib.compress(raw, 6)))
+        fh.write(png_chunk(b"IEND", b""))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-o", "--output", default="/tmp/giulia-photo.png")
+    ap.add_argument("-s", "--size", default="3280x2464")
+    ap.add_argument("--frames", type=int, default=8, help="AE iterations")
+    ap.add_argument("--exp", type=int, default=None)
+    ap.add_argument("--gain", type=int, default=None)
+    ap.add_argument("--no-ae", action="store_true")
+    ap.add_argument("--raw", default=None)
+    args = ap.parse_args()
+
+    w, h = (int(x) for x in args.size.lower().split("x"))
+    sensor, subdev, video = find_nodes()
+    print("giulia-photo: %s -> %s (%dx%d)" % (sensor, video, w, h))
+
+    setup_pipeline(sensor, w, h)
+
+    exp_lo, exp_hi = ctrl_range(subdev, "exposure")
+    gain_lo, gain_hi = ctrl_range(subdev, "analogue_gain")
+    exp_lo = 1 if exp_lo is None else exp_lo
+    exp_hi = 0xffff if exp_hi is None else exp_hi
+    gain_lo = 0 if gain_lo is None else gain_lo
+    gain_hi = 960 if gain_hi is None else gain_hi
+
+    exp = args.exp if args.exp is not None else max(exp_lo, exp_hi // 16)
+    gain = args.gain if args.gain is not None else max(gain_lo, gain_hi // 8)
+
+    raw = args.raw or "/tmp/giulia-photo.raw"
+    iters = 1 if args.no_ae else args.frames
+    best = None
+
+    for it in range(iters):
+        set_ctrl(subdev, exposure=exp, analogue_gain=gain)
+        time.sleep(0.15)
+        if not grab(video, w, h, raw):
+            sys.exit("giulia-photo: capture failed (check dmesg)")
+        px = unpack_raw10(raw)
+        if px is None or len(px) < w * h:
+            sys.exit("giulia-photo: short frame (%s)" % (len(px) if px is not None else 0))
+        f = px[:w * h].astype(np.float32)
+        # metering: use a high percentile rather than the mean, like a camera
+        # spot/centre-weighted meter, so dark corners do not dominate
+        level = float(np.percentile(f, 95.0))
+        print("  AE %d: exposure=%-6d gain=%-4d p95=%7.1f" % (it, exp, gain, level))
+        best = px
+        if args.no_ae:
+            break
+        target = 620.0
+        mean = level
+        if mean < 1e-3:
+            gain = min(gain_hi, gain * 2 + 1)
+            continue
+        err = target / mean
+        if 0.8 < err < 1.25:
+            break
+        if err < 1.0:
+            if gain > gain_lo + max(1, (gain_hi - gain_lo) // 16):
+                gain = max(gain_lo, int(gain * max(err, 0.5)))
+            else:
+                exp = max(exp_lo, int(exp * max(err, 0.5)))
+        else:
+            if gain < gain_hi // 2:
+                gain = min(gain_hi, int(gain * min(err, 2.0)) + 1)
+            else:
+                exp = min(exp_hi, int(exp * min(err, 2.0)) + 1)
+
+    print("giulia-photo: final exposure=%d gain=%d" % (exp, gain))
+    rgb = debayer_rggb(best, w, h)
+    rgb = awb_greyworld(rgb)
+    rgb8 = (to_srgb(rgb) * 255.0 + 0.5).astype(np.uint8)
+    write_png(args.output, rgb8)
+    print("giulia-photo: wrote %s" % args.output)
+
+    if shutil.which("ffmpeg"):
+        jpg = os.path.splitext(args.output)[0] + ".jpg"
+        run(["ffmpeg", "-loglevel", "error", "-y", "-i", args.output, jpg])
+        if os.path.exists(jpg):
+            print("giulia-photo: wrote %s" % jpg)
+
+
+if __name__ == "__main__":
+    main()
