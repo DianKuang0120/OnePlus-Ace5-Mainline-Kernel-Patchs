@@ -807,7 +807,6 @@ csiphy_lane_regs lane_regs_sm8650[] = {
 /* 5nm 2PH v 2.2.0 C-PHY (3 trios) lane registers, from the OPLUS cam_csiphy tables */
 static const struct
 csiphy_lane_regs lane_regs_sm8650_cphy[] = {
-	/* --- 3-phase lane config --- */
 	{0x02F4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x02F8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x02FC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
@@ -877,29 +876,28 @@ csiphy_lane_regs lane_regs_sm8650_cphy[] = {
 	{0x0A60, 0xA8, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A84, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A90, 0x02, 0x00, CSIPHY_DEFAULT_PARAMS},
-	/* --- data-rate specific AFE/CDR + settle for 3.3 Gsym/s --- */
 	{0x0268, 0xF1, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0294, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0278, 0x14, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0288, 0x20, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x026C, 0x2D, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x028C, 0x37, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x026C, 0x2B, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x028C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0270, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0274, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0668, 0xF1, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0694, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0678, 0x14, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0688, 0x20, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x066C, 0x2D, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x068C, 0x37, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x066C, 0x2B, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x068C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0670, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0674, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A68, 0xF1, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A94, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A78, 0x14, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A88, 0x20, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x0A6C, 0x2D, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x0A8C, 0x37, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A6C, 0x2B, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A8C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A70, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A74, 0x03, 0x0A, CSIPHY_DEFAULT_PARAMS},
 	{0x020C, 0x1E, 0x00, CSIPHY_SETTLE_CNT_LOWER_BYTE},
@@ -1293,6 +1291,14 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	int i;
 
 	settle_cnt = csiphy_settle_cnt_calc(link_freq, csiphy->timer_clk_rate);
+	if (cfg->csi2 && cfg->csi2->is_cphy) {
+		/*
+		 * OPLUS computes the C-PHY settle count as
+		 * settle_time / 200000000; Android reports settle_time
+		 * 5600000000 for this mode, i.e. 28.
+		 */
+		settle_cnt = 28;
+	}
 
 	dev_info(csiphy->camss->dev,
 		 "csiphy%d lanes_enable: is_cphy=%d lane_mask=0x%02x settle=%u\n",
@@ -1341,7 +1347,7 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	    csiphy->camss->res->version == CAMSS_8650) {
 		/* OPLUS csiphy_common_reg_2_2_0 (not otherwise written) */
 		writel_relaxed(0x00, csiphy->base + 0x1084);
-		writel_relaxed(0x01, csiphy->base + 0x108c);
+		writel_relaxed(0x00, csiphy->base + 0x108c);
 	}
 
 	if (csiphy_is_gen2(csiphy->camss->res->version))
@@ -1363,6 +1369,15 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 			 readl_relaxed(csiphy->base + 0x101c),
 			 readl_relaxed(csiphy->base + 0x1084),
 			 readl_relaxed(csiphy->base + 0x108c));
+		{
+			/* Full PHY register map, same "0x<off>=0x<val>" form the
+			 * OPLUS cam_csiphy_io_dump() prints, for an exact diff.
+			 */
+			int k;
+			for (k = 0; k < 0x800; k++)
+				pr_info("IMX906PHY 0x%x=0x%x\n", k << 2,
+					readl_relaxed(csiphy->base + (k << 2)));
+		}
 		{
 			int k;
 			dev_info(csiphy->camss->dev, "C-PHY common_status at config:");
@@ -1394,10 +1409,17 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 			 readl_relaxed(csiphy->base + 0x0358));
 	}
 
-	/* IRQ_MASK registers - disable all interrupts */
-	for (i = 11; i < 22; i++) {
-		writel_relaxed(0, csiphy->base +
-			       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, i));
+	/* IRQ_MASK registers: the OPLUS C-PHY values, otherwise all off */
+	{
+		static const u8 cphy_irq_mask[11] = {
+			0xff, 0xff, 0xfb, 0xff, 0x7f, 0xff, 0xff, 0xef,
+			0xff, 0xff, 0xff,
+		};
+		for (i = 11; i < 22; i++)
+			writel_relaxed((cfg->csi2 && cfg->csi2->is_cphy) ?
+				       cphy_irq_mask[i - 11] : 0,
+				       csiphy->base +
+				       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, i));
 	}
 }
 
