@@ -22,7 +22,14 @@ IDX_END = 3651             # inclusive end of the stream-on block
 init = w[:61] + w[IDX_CONFIG:IDX_STREAM]
 start = w[IDX_STREAM:IDX_END]
 
+# The vendor's stream-on (see the lossy capture) also writes 0x3010 = 0x03
+# right after opening the group hold; the lossless decode has it in a later
+# block, but it is the MIPI output enable and our table was missing it.
 assert start[-1][0] == 0x0100 and start[-1][1] == 1, start[-1:]
+
+# The vendor's second block writes 0x3010 = 0x03 right after the 0x0100=1
+# trigger; try that ordering (MIPI output enable).
+start = start + [(0x3010, 0x03)]
 
 # ---------------------------------------------------------------------------
 # Mainline camss only supports D-PHY (camss_parse_endpoint() rejects C-PHY),
