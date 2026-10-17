@@ -180,6 +180,12 @@ static int imx906_power_on(struct imx906 *s)
 {
 	int ret;
 
+	/* The sensor PLL is specified for a 19.2 MHz input clock. */
+	ret = clk_set_rate(s->clk, 19200000);
+	if (ret)
+		dev_warn(s->dev, "clk_set_rate(19.2M) failed: %d\n", ret);
+	dev_info(s->dev, "MCLK = %lu Hz\n", clk_get_rate(s->clk));
+
 	ret = clk_prepare_enable(s->clk);
 	if (ret)
 		return dev_err_probe(s->dev, ret, "failed to enable MCLK\n");
