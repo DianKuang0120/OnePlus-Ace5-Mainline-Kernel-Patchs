@@ -54,6 +54,54 @@ tables:
 lane_en 0x1014=0x2a   0x02f0=0xef  0x0264=0x01  0x0244=0xb2  0x02bc=0xd0
 ```
 
+## Latest: the CSID mapping was wrong, and what the vendor registers say
+
+### phy1 feeds CSID0, not CSID1
+
+The stock CSIPHY log states the mapping outright:
+
+```
+CAM_START_PHYDEV: 1, CSID:0, Type: CPHY, slot: 0, Datarate: 7471533333, Settletime: 5600000000
+CAM_STOP_PHYDEV:  1, CSID:0, Type: CPHY, ...
+cam_csiphy_update_lane_selection: lane_reg_addr: 0x1014, lane_assign: 0x210
+```
+
+mainline had been wiring `csiphy1 -> csid1 -> vfe1`; it is now
+`csiphy1 -> csid0 -> vfe0_rdi0` (`giulia-cam906`, 3a16eb2).  Still no frames.
+
+### Reading the vendor's PHY on stock Android
+
+The OPLUS csiphy driver exposes per-PHY debugfs switches under
+`<debugfs>/camera/csiphy/CSIPHY1/` (`en_common_status_reg_dump`,
+`en_lane_status_reg_dump`, `en_full_phy_reg_dump`; note Android mounts debugfs
+at an obfuscated path here - find it with `mount | grep debugfs`).
+
+`en_common_status_reg_dump` reads `mipi_csiphy_interrupt_status0_addr + 4n`
+for n = 0..19 **and clears each register as it goes**, so it is a one-shot
+snapshot of the PHY's interrupt/status latches.  With the camera streaming it
+prints:
+
+```
+vendor : 00 00 19 00 20 03 00 64 00 00 00 2a 00 00 00 00 00 00 00 d8
+```
+
+mainline's equivalent, read right after the lane configuration, is
+
+```
+mainline: 00 00 00 00 00 00 00 00 00 00 00 2a 00 00 00 00 00 00 00 d7
+```
+
+Only the lane-enable mirror (index 11, 0x2a) and index 19 differ by a bit; the
+vendor has status bits set at indices 2, 4, 5 and 7 (0x19, 0x20, 0x03, 0x64).
+The two snapshots are not taken at the same point in the sequence (vendor:
+right after its reset; mainline: after the full lane configuration), so this is
+suggestive rather than conclusive - but a PHY that has not latched anything at
+all is consistent with "no signal ever reached it".
+
+Register addresses verified against
+`CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(offset, common_status_offset, n)` =
+`0x1000 + 0x4n + 0xb0`, i.e. the same window the vendor reads.
+
 ## Where it stands
 
 The pipeline starts (STREAMON succeeds, the sensor's init and stream-on tables

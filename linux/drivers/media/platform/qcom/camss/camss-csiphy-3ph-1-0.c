@@ -1363,6 +1363,15 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 			 readl_relaxed(csiphy->base + 0x101c),
 			 readl_relaxed(csiphy->base + 0x1084),
 			 readl_relaxed(csiphy->base + 0x108c));
+		{
+			int k;
+			dev_info(csiphy->camss->dev, "C-PHY common_status at config:");
+			for (k = 0; k < 20; k++)
+				pr_cont(" %02x", readl_relaxed(csiphy->base +
+					CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(regs->offset,
+						regs->common_status_offset, k)) & 0xff);
+			pr_cont("\n");
+		}
 		dev_info(csiphy->camss->dev,
 			 "C-PHY AFE: 0x0268=%08x 0x0278=%08x 0x0288=%08x 0x026c=%08x 0x028c=%08x 0x0270=%08x 0x020c=%08x 0x0208=%08x\n",
 			 readl_relaxed(csiphy->base + 0x0268),
@@ -1428,12 +1437,17 @@ static void csiphy_lanes_disable(struct csiphy_device *csiphy,
 			 readl_relaxed(csiphy->base + 0x0358),
 			 readl_relaxed(csiphy->base + 0x0758),
 			 readl_relaxed(csiphy->base + 0x0b58));
-		dev_info(csiphy->camss->dev,
-			 "  common_status 0x%04x=%08x\n",
-			 regs->offset + regs->common_status_offset,
-			 readl_relaxed(csiphy->base +
-				CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(regs->offset,
-					regs->common_status_offset, 0)));
+		{
+			int k;
+			dev_info(csiphy->camss->dev,
+				 "  common_status (0x%04x..) :",
+				 regs->offset + regs->common_status_offset);
+			for (k = 0; k < 20; k++)
+				pr_cont(" %02x", readl_relaxed(csiphy->base +
+					CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(regs->offset,
+						regs->common_status_offset, k)) & 0xff);
+			pr_cont("\n");
+		}
 	}
 
 	writel_relaxed(0, csiphy->base +
