@@ -38,6 +38,7 @@ MODES = [("8 MP  (3280x2464)", 3280, 2464),
 EXP_DEFAULT = 320
 GAIN_DEFAULT = 120
 BLACK_LEVEL = 64.0
+BLACK_LIFT = 0.02         # tiny black point lift, keeps blacks black
 
 
 # --------------------------------------------------------------------------
@@ -154,10 +155,12 @@ def unpack_frame(buf, w, h, bpl):
 
 def quick_preview(px, w, h, scale=4):
     """Half-resolution RGB straight from the four Bayer phases (fast)."""
-    r = px[0::2, 0::2].astype(np.float32)
-    g1 = px[0::2, 1::2].astype(np.float32)
-    g2 = px[1::2, 0::2].astype(np.float32)
-    b = px[1::2, 1::2].astype(np.float32)
+    # black must go before any per-channel gain, otherwise every channel
+    # keeps a different offset (64*(gain-1)) and the shadows turn magenta
+    r = px[0::2, 0::2].astype(np.float32) - BLACK_LEVEL
+    g1 = px[0::2, 1::2].astype(np.float32) - BLACK_LEVEL
+    g2 = px[1::2, 0::2].astype(np.float32) - BLACK_LEVEL
+    b = px[1::2, 1::2].astype(np.float32) - BLACK_LEVEL
     g = 0.5 * (g1 + g2)
     # box-reduce by (scale/2)
     k = max(1, scale // 2)
@@ -183,7 +186,7 @@ def box_fill(values, mask, h, w):
 
 
 def demosaic(px, w, h):
-    f = px.astype(np.float32)
+    f = np.clip(px.astype(np.float32) - BLACK_LEVEL, 0, None)
     rmask = np.zeros((h, w), bool); rmask[0::2, 0::2] = True
     bmask = np.zeros((h, w), bool); bmask[1::2, 1::2] = True
     gmask = np.zeros((h, w), bool)
@@ -209,6 +212,14 @@ def denoise(rgb, chroma=0.9, luma=0.35):
     return np.clip(y + c, 0, None)
 
 
+def shadow_desat(x, knee=0.035, full=0.16):
+    """Fade colour out towards black: residual chroma noise in the shadows is
+    what reads as a magenta cast."""
+    y = x.mean(axis=2, keepdims=True)
+    t = np.clip((y - knee) / (full - knee), 0, 1)
+    return y + (x - y) * t
+
+
 def awb(rgb):
     m = rgb.reshape(-1, 3).mean(axis=0)
     return rgb * np.clip(m.mean() / np.maximum(m, 1e-6), 0.5, 2.0)
@@ -218,7 +229,10 @@ def srgb(rgb):
     hi = np.percentile(rgb, 99.7)
     x = np.clip(rgb / hi if hi > 0 else rgb, 0, 1)
     lo = np.percentile(x, 0.5)
-    return np.clip(np.clip((x - lo) / max(1e-6, 1 - lo), 0, 1) ** (1 / 2.2), 0, 1)
+    x = np.clip((x - lo) / max(1e-6, 1 - lo), 0, 1)
+    x = shadow_desat(x)
+    x = np.clip((x - BLACK_LIFT) / (1.0 - BLACK_LIFT), 0, 1)
+    return np.clip(x ** (1 / 2.2), 0, 1)
 
 
 def save_png(path, rgb8):
@@ -260,6 +274,7 @@ class Capture(QThread):
         self.running = False
         self.proc = None
         self.wb_gains = np.ones(3, np.float32)
+        self.recent = []
 
     @staticmethod
     def denoise_preview(rgb, chroma=0.8):
@@ -312,6 +327,9 @@ class Capture(QThread):
                 continue
             self.frames += 1
             fps_n += 1
+            self.recent.append(px)
+            if len(self.recent) > 4:
+                self.recent.pop(0)
 
             # ---- preview: half-res RGB from the four Bayer phases ----
             rgb = quick_preview(px, self.w, self.h, 4)
@@ -321,9 +339,10 @@ class Capture(QThread):
                 self.wb_gains = 0.85 * self.wb_gains + 0.15 * target
             rgb = self.denoise_preview(rgb)
             rgb = rgb * self.wb_gains
-            rgb = np.clip(rgb - BLACK_LEVEL, 0, None)
             hi = np.percentile(rgb, 99.7) or 1.0
-            img = rgb_to_qimage((np.clip(rgb / hi, 0, 1) ** (1 / 2.2)) * 255.0)
+            x = shadow_desat(np.clip(rgb / hi, 0, 1))
+            x = np.clip((x - BLACK_LIFT) / (1.0 - BLACK_LIFT), 0, 1)
+            img = rgb_to_qimage((x ** (1 / 2.2)) * 255.0)
             self.preview.emit(img)
             self.raw_frame.emit(px)
 
@@ -371,7 +390,17 @@ class SaveStill(QThread):
 
     def run(self):
         try:
-            rgb = demosaic(self.px, self.w, self.h)
+            px = self.px
+            if isinstance(px, list):
+                ref = float(px[-1].mean())
+                keep = [f for f in px
+                        if f.shape == px[-1].shape
+                        and abs(float(f.mean()) - ref) <= 0.10 * ref]
+                if len(keep) >= 2:
+                    px = np.mean(np.stack(keep), axis=0)
+                else:
+                    px = px[-1]
+            rgb = demosaic(px, self.w, self.h)
             rgb = denoise(rgb)
             rgb = awb(rgb)
             rgb8 = (srgb(rgb) * 255.0 + 0.5).astype(np.uint8)
@@ -545,7 +574,9 @@ class MainWindow(QMainWindow):
             return
         self.shutter.setEnabled(False)
         self.status.showMessage("saving photo...")
-        self.saving = SaveStill(self.last_px.copy(), self.last_px.shape[1],
+        frames = list(self.cap.recent) if self.cap and self.cap.recent else []
+        self.saving = SaveStill(frames or self.last_px.copy(),
+                                self.last_px.shape[1],
                                 self.last_px.shape[0], self.outdir)
         self.saving.done.connect(self.on_saved)
         self.saving.failed.connect(self.on_save_failed)

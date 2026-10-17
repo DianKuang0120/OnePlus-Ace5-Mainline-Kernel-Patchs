@@ -199,8 +199,16 @@ def box_fill(values, mask, h, w):
     return np.where(mask, values, s / np.maximum(c, 1.0))
 
 
+BLACK_LEVEL = 64.0      # IMX355 pedestal, in 10-bit units
+BLACK_LIFT = 0.02       # keep true black black after normalisation
+
+
 def debayer_rggb(px, w, h):
-    f = np.asarray(px).reshape(h, w).astype(np.float32)
+    # Subtract black here, in the RAW domain: doing it after the white balance
+    # leaves every channel with a different offset (64*(gain-1)) and the
+    # shadows turn magenta.
+    f = np.clip(np.asarray(px).reshape(h, w).astype(np.float32) - BLACK_LEVEL,
+                0, None)
 
     rmask = np.zeros((h, w), bool)
     rmask[0::2, 0::2] = True
@@ -222,11 +230,21 @@ def awb_greyworld(rgb):
     return rgb * gains
 
 
+def shadow_desat(x, knee=0.035, full=0.16):
+    """Fade chroma out towards black; residual colour noise down there is what
+    reads as a magenta cast."""
+    y = x.mean(axis=2, keepdims=True)
+    t = np.clip((y - knee) / (full - knee), 0, 1)
+    return y + (x - y) * t
+
+
 def to_srgb(rgb, gamma=2.2):
     hi = np.percentile(rgb, 99.7)
     x = np.clip(rgb / hi if hi > 0 else rgb, 0, 1)
     lo = np.percentile(x, 0.5)
     x = np.clip((x - lo) / max(1e-6, 1.0 - lo), 0, 1)
+    x = shadow_desat(x)
+    x = np.clip((x - BLACK_LIFT) / (1.0 - BLACK_LIFT), 0, 1)
     return np.clip(x ** (1.0 / gamma), 0, 1)
 
 
