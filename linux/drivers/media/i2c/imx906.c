@@ -235,6 +235,24 @@ static int imx906_set_stream(struct v4l2_subdev *sd, int enable)
 		if (ret)
 			goto err;
 
+		{
+			/* Read the whole init table back and report mismatches. */
+			unsigned int k, bad = 0;
+			for (k = 0; k < ARRAY_SIZE(imx906_init_regs); k++) {
+				u8 v = 0;
+				if (imx906_read_reg8(s, imx906_init_regs[k].addr, &v))
+					continue;
+				if (v != imx906_init_regs[k].val && bad < 40) {
+					dev_info(s->dev,
+						 "readback mismatch 0x%04x: wrote 0x%02x read 0x%02x\n",
+						 imx906_init_regs[k].addr,
+						 imx906_init_regs[k].val, v);
+					bad++;
+				}
+			}
+			dev_info(s->dev, "init readback done (%u mismatches shown)\n", bad);
+		}
+
 		/* The PHY mode / lane count the part actually ended up in. */
 		{
 			u8 sig = 0, lanes = 0;
@@ -246,10 +264,32 @@ static int imx906_set_stream(struct v4l2_subdev *sd, int enable)
 					 lanes);
 		}
 
+		/*
+		 * The vendor tables carry per-register delays that the CCI
+		 * capture does not record; give the PLL/mode writes time to
+		 * settle before pulling the stream-on trigger.
+		 */
+		usleep_range(50000, 51000);
+
 		ret = imx906_write_table(s, imx906_start_regs,
 					 ARRAY_SIZE(imx906_start_regs));
 		if (ret)
 			goto err;
+		usleep_range(5000, 6000);
+
+		{
+			u16 id = 0;
+			u8 m = 0, a = 0, b = 0, c = 0;
+			int r1, r2, r3, r4, r5;
+			r1 = imx906_read_reg16(s, 0x0016, &id);
+			r2 = imx906_read_reg8(s, 0x0100, &m);
+			r3 = imx906_read_reg8(s, 0x0300, &a);
+			r4 = imx906_read_reg8(s, 0x0301, &b);
+			r5 = imx906_read_reg8(s, 0x0111, &c);
+			dev_info(s->dev,
+				 "after stream-on: chipid=0x%04x(rc%d) 0x0100=0x%02x(rc%d) 0x0300=0x%02x(rc%d) 0x0301=0x%02x(rc%d) 0x0111=0x%02x(rc%d)\n",
+				 id, r1, m, r2, a, r3, b, r4, c, r5);
+		}
 	} else {
 		ret = imx906_write_reg(s, IMX906_REG_STREAM, 0x00);
 		pm_runtime_put(s->dev);
