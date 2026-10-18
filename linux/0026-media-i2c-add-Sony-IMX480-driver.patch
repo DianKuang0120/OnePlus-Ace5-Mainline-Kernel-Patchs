@@ -1,0 +1,29 @@
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -297,6 +297,16 @@
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called imx415.
+ 
++config VIDEO_IMX480
++	tristate "Sony IMX480 sensor support"
++	select V4L2_CCI_I2C
++	help
++	  This is a Video4Linux2 sensor driver for the Sony
++	  IMX480 camera module.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called imx480.
++
+ config VIDEO_MAX9271_LIB
+ 	tristate
+ 
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -62,6 +62,7 @@
+ obj-$(CONFIG_VIDEO_IMX906) += imx906.o
+ obj-$(CONFIG_VIDEO_IMX412) += imx412.o
+ obj-$(CONFIG_VIDEO_IMX415) += imx415.o
++obj-$(CONFIG_VIDEO_IMX480) += imx480.o
+ obj-$(CONFIG_VIDEO_IR_I2C) += ir-kbd-i2c.o
+ obj-$(CONFIG_VIDEO_ISL7998X) += isl7998x.o
+ obj-$(CONFIG_VIDEO_KS0127) += ks0127.o

@@ -214,3 +214,25 @@ and the CSIPHY registers still match the vendor dump register for register.
 the vendor now agrees, so the next step is the same technique one stage
 further up - read the vendor's CSID/IFE registers on stock Android (the OPLUS
 driver has an `ife` debugfs directory) and diff those, then the VFE/RDI config.
+
+## Resolved (2026-10-18)
+
+Two independent problems were left after the register-level C-PHY work above:
+
+1. **The captured stream-on table was contaminated with a per-frame AE
+   write.**  `0x0303=0x60` is not a stream-on/PLL value; writing it before
+   `0x0100=1` wedges the sensor's PLL.  I2C then ACKs but returns a constant
+   byte for every register until the sensor is power cycled.  Dropping the
+   first two entries (`0x0303=0x60`, `0x0302=0xe6`) from the start table
+   makes the sensor stream normally (`chipid=0x0906`, `0x0100=0x01`).
+
+2. **CSI virtual channel mismatch.**  The vendor mode table sets
+   `0x0110 = 0x02` (VC 2), but mainline `camss-csid-gen3` hardcodes VC 0 in
+   `RDI_CFG0`.  The CSID reported `UNMAPPED_VC_DT` (bit 22 of
+   `CSID_CSI2_RX_IRQ_STATUS`) and produced no buffer-done interrupts.
+   Forcing the sensor to VC 0 (`0x0110 = 0x00`) makes the packets map to
+   RDI0.
+
+With both fixes the PHY common-status snapshot matches the vendor streaming
+snapshot and two 4096x3072 RAW10 frames are captured through
+CSIPHY1 -> CSID0 -> VFE0/RDI0.

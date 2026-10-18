@@ -1,0 +1,13 @@
+--- a/sound/soc/qcom/lpass-cpu.c
++++ b/sound/soc/qcom/lpass-cpu.c
+@@ -1234,8 +1234,8 @@
+ 		}
+ 		if (drvdata->mi2s_playback_sd_mode[dai_id] ==
+ 			LPAIF_I2SCTL_MODE_QUAD01) {
+-			variant->dai_driver[i].playback.channels_min = 4;
+-			variant->dai_driver[i].playback.channels_max = 4;
++			variant->dai_driver[dai_id].playback.channels_min = 4;
++			variant->dai_driver[dai_id].playback.channels_max = 4;
+ 		}
+ 	}
+ 

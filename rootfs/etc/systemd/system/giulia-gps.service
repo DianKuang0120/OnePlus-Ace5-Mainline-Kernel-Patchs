@@ -1,0 +1,14 @@
+[Unit]
+Description=QMI LOC to Geoclue NMEA bridge
+After=ModemManager.service geoclue.service
+Wants=ModemManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/giulia-gps/gps_nmea_feed.py
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

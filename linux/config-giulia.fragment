@@ -1,5 +1,0 @@
-# giulia-specific kernel options (merge into out/.config before building).
-# Keep this list in sync with the features in README.md.
-
-# Camera: ultrawide Sony IMX355 (CAMSS/CSID/VFE + the sensor driver)
-CONFIG_VIDEO_IMX355=m

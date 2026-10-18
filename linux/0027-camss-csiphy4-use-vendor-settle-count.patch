@@ -1,0 +1,12 @@
+--- a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+@@ -1291,6 +1291,9 @@
+ 	int i;
+ 
+ 	settle_cnt = csiphy_settle_cnt_calc(link_freq, csiphy->timer_clk_rate);
++	/* The OPLUS front camera (IMX480 on CSIPHY4) uses settle count 26. */
++	if (csiphy->id == 4)
++		settle_cnt = 26;
+ 	if (cfg->csi2 && cfg->csi2->is_cphy) {
+ 		/*
+ 		 * OPLUS computes the C-PHY settle count as

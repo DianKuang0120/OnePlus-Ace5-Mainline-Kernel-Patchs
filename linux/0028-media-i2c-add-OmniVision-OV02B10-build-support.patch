@@ -1,0 +1,29 @@
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -423,6 +423,16 @@
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called ov02a10.
+ 
++config VIDEO_OV02B10
++	tristate "OmniVision OV02B10 sensor support"
++	select V4L2_CCI_I2C
++	help
++	  This is a Video4Linux2 sensor driver for the OmniVision
++	  OV02B10 camera.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called ov02b10.
++
+ config VIDEO_OV02E10
+ 	tristate "OmniVision OV02E10 sensor support"
+ 	select V4L2_CCI_I2C
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -89,6 +89,7 @@
+ obj-$(CONFIG_VIDEO_OS05B10) += os05b10.o
+ obj-$(CONFIG_VIDEO_OV01A10) += ov01a10.o
+ obj-$(CONFIG_VIDEO_OV02A10) += ov02a10.o
++obj-$(CONFIG_VIDEO_OV02B10) += ov02b10.o
+ obj-$(CONFIG_VIDEO_OV02C10) += ov02c10.o
+ obj-$(CONFIG_VIDEO_OV02E10) += ov02e10.o
+ obj-$(CONFIG_VIDEO_OV08D10) += ov08d10.o

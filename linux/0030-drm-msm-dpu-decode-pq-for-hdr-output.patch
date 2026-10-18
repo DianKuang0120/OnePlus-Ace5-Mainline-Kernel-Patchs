@@ -1,0 +1,401 @@
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+@@ -11,6 +11,8 @@
+ #include <linux/debugfs.h>
+ #include <linux/ktime.h>
+ #include <linux/bits.h>
++#include <linux/hdmi.h>
++#include <linux/limits.h>
+ 
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_blend.h>
+@@ -37,6 +39,274 @@
+ /* layer mixer index on dpu_crtc */
+ #define LEFT_MIXER 0
+ #define RIGHT_MIXER 1
++
++/*
++ * HDR (PQ) output support.
++ *
++ * Compositors such as KWin hand the display a PQ (SMPTE ST 2084) encoded
++ * signal and expect the sink to apply the inverse EOTF, because that is what
++ * a HDMI/DP sink does.  A panel driven by the DPU does not do that, so the
++ * DPU has to decode PQ first and then re-encode the result with the panel
++ * gamma, scaled down to the peak luminance the panel advertised in its EDID.
++ * Both steps are folded into a single 1D LUT which is programmed into the
++ * DSPP gamma correction (GC) block.
++ *
++ * The kernel has no floating point, so the ST 2084 EOTF and the panel gamma
++ * are evaluated with Q16.16 fixed point math, using Q32.32 where more range
++ * or precision is needed.
++ */
++#define DPU_FP_SHIFT	16
++#define DPU_FP_ONE	(1 << DPU_FP_SHIFT)
++#define DPU_FP32_ONE	(1LL << 32)
++
++/* Peak luminance of the ST 2084 container, in cd/m^2 */
++#define DPU_HDR_PQ_MAX_NITS	10000
++/* Used when the connector does not advertise a usable peak luminance */
++#define DPU_HDR_DEFAULT_PEAK_NITS	1000
++
++/* Multiply two Q16.16 values */
++static inline s64 dpu_fp_mul(s64 a, s64 b)
++{
++	return (a * b) >> DPU_FP_SHIFT;
++}
++
++/**
++ * dpu_fp_log2 - base 2 logarithm of a Q16.16 value
++ * @x: value to take the logarithm of
++ *
++ * Returns LOG2(x) in Q16.16, or S64_MIN for x == 0.
++ */
++static s64 dpu_fp_log2(u64 x)
++{
++	s64 e = 0, y, z, z2, z3, z5, z7, z9, z11, sum;
++
++	if (!x)
++		return S64_MIN;
++
++	/* normalize the mantissa into [1, 2) */
++	while (x >= (u64)(2 * (u64)DPU_FP_ONE)) {
++		x >>= 1;
++		e++;
++	}
++	while (x < (u64)DPU_FP_ONE) {
++		x <<= 1;
++		e--;
++	}
++
++	/*
++	 * LOG2(y) = LOG(y) / LOG(2) with
++	 * LOG(y) = 2 * (z + z^3/3 + z^5/5 + z^7/7 + ...) and
++	 * z = (y - 1) / (y + 1), which keeps z within [0, 1/3].
++	 */
++	y = (s64)x;
++	z = ((y - DPU_FP_ONE) * DPU_FP_ONE) / (y + DPU_FP_ONE);
++	z2 = dpu_fp_mul(z, z);
++	z3 = dpu_fp_mul(z2, z);
++	z5 = dpu_fp_mul(z2, z3);
++	z7 = dpu_fp_mul(z2, z5);
++	z9 = dpu_fp_mul(z2, z7);
++	z11 = dpu_fp_mul(z2, z9);
++	sum = z + z3 / 3 + z5 / 5 + z7 / 7 + z9 / 9 + z11 / 11;
++
++	/* 1 / LOG(2) in Q16.16 is 94548 */
++	return e * DPU_FP_ONE + ((sum * 2 * 94548) >> DPU_FP_SHIFT);
++}
++
++/**
++ * dpu_fp_exp2 - 2 raised to a Q16.16 power
++ * @x: exponent in Q16.16
++ *
++ * Returns 2^x in Q16.16, saturated on overflow/underflow.
++ */
++static u64 dpu_fp_exp2(s64 x)
++{
++	s64 e = x >> DPU_FP_SHIFT;
++	u64 fr = (u64)(x & 0xffff);
++	u64 t, t2, t3, t4, t5, t6, t7, sum;
++
++	/* 2^fr = EXP(fr * LOG(2)), with LOG(2) in Q16.16 being 45426 */
++	t = (fr * 45426) >> DPU_FP_SHIFT;
++	t2 = dpu_fp_mul(t, t);
++	t3 = dpu_fp_mul(t2, t);
++	t4 = dpu_fp_mul(t2, t2);
++	t5 = dpu_fp_mul(t4, t);
++	t6 = dpu_fp_mul(t3, t3);
++	t7 = dpu_fp_mul(t4, t3);
++	sum = DPU_FP_ONE + t + t2 / 2 + t3 / 6 + t4 / 24 + t5 / 120 +
++	      t6 / 720 + t7 / 5040;
++
++	if (e >= 0) {
++		if (e > 40)
++			return U64_MAX;
++		return sum << e;
++	}
++	if (-e > 40)
++		return 0;
++	return sum >> -e;
++}
++
++/**
++ * dpu_pq_panel_code - convert a PQ encoded code to a panel encoded code
++ * @x: PQ encoded input in Q16.16
++ * @log2_scale: LOG2(10000 / peak_nits) in Q16.16
++ *
++ * Applies the SMPTE ST 2084 EOTF, scales the resulting linear luminance down
++ * to the peak luminance of the panel and finally applies the panel gamma
++ * (2.2).  The whole computation is done in the logarithmic domain so that
++ * the very dark end of the PQ curve does not lose precision.
++ *
++ * Returns the panel encoded value in Q16.16.
++ */
++static u64 dpu_pq_panel_code(u64 x, s64 log2_scale)
++{
++	s64 lx, ln, u, term, d, num, den, r, lr, ly;
++
++	if (!x)
++		return 0;
++
++	lx = dpu_fp_log2(x);		/* LOG2(x) */
++	ln = lx * 45426;		/* LOG(x)   : Q32.32 */
++	u = (ln * 4096) / 322944;	/* LOG(x)/m2 : Q32.32 */
++
++	/*
++	 * p = x^(1/m2) is very close to 1 for the whole PQ range, so compute
++	 * d = 1 - p straight from the expm1() series instead of subtracting a
++	 * rounded p from 1: that subtraction would destroy most of the
++	 * significant bits of d and get amplified by the (1/m1) exponent
++	 * below.
++	 */
++	term = DPU_FP32_ONE + u / 5;
++	term = DPU_FP32_ONE + (((u / 4) * term) >> 32);
++	term = DPU_FP32_ONE + (((u / 3) * term) >> 32);
++	term = DPU_FP32_ONE + (((u / 2) * term) >> 32);
++	d = -((u * term) >> 32);
++
++	/*
++	 * (p - c1) / (c2 - c3 * p) with c1 = 3424/4096, c2 = 2413*32/4096 and
++	 * c3 = 2392*32/4096.  Rewritten in terms of d it becomes the much
++	 * better conditioned (0.1640625 - d) / (0.1640625 + 18.6875 * d).
++	 */
++	num = 704643072 - d;			/* 0.1640625 << 32 */
++	if (num <= 0)
++		return 0;
++	den = 704643072 + ((d * 299) >> 4);	/* 18.6875 == 299 / 16 */
++	r = (num << DPU_FP_SHIFT) / den;	/* Q16.16 */
++	if (r <= 0)
++		return 0;
++
++	lr = dpu_fp_log2((u64)r);	/* LOG2(PQ EOTF output) */
++	ly = (lr * 16384) / 2610;	/* ^ (1/m1) */
++	ly += log2_scale;		/* scale down to the panel peak */
++	ly = (ly * 1000) / 2200;	/* ^ (1/2.2), the panel gamma */
++	if (ly > 0)
++		ly = 0;			/* clip to the panel peak */
++
++	return dpu_fp_exp2(ly);
++}
++
++/* Map a 16 bit LUT value onto the index of a DPU gamma LUT */
++static inline u32 dpu_lut_index(u16 val)
++{
++	return ((u32)val * (DPU_GAMMA_LUT_SIZE - 1) + 0x7fff) / 0xffff;
++}
++
++/**
++ * dpu_crtc_build_hdr_gc_lut - build the PQ to panel gamma LUT
++ * @state: CRTC state, may carry a compositor supplied gamma LUT
++ * @peak_nits: peak luminance of the panel in cd/m^2
++ *
++ * Returns a newly allocated DPU_GAMMA_LUT_SIZE entries LUT, or NULL on
++ * allocation failure.
++ */
++static struct drm_color_lut *dpu_crtc_build_hdr_gc_lut(struct drm_crtc_state *state,
++						       u32 peak_nits)
++{
++	const struct drm_color_lut *user = NULL;
++	struct drm_color_lut *lut;
++	s64 log2_scale;
++	u32 scale;
++	u64 x;
++	int i;
++
++	if (peak_nits < 100 || peak_nits > DPU_HDR_PQ_MAX_NITS)
++		peak_nits = DPU_HDR_DEFAULT_PEAK_NITS;
++
++	lut = kcalloc(DPU_GAMMA_LUT_SIZE, sizeof(*lut), GFP_KERNEL);
++	if (!lut)
++		return NULL;
++
++	if (state->gamma_lut && state->gamma_lut->data)
++		user = state->gamma_lut->data;
++
++	scale = DIV_ROUND_CLOSEST(DPU_HDR_PQ_MAX_NITS * DPU_FP_ONE, peak_nits);
++	log2_scale = dpu_fp_log2(scale);
++
++	for (i = 0; i < DPU_GAMMA_LUT_SIZE; i++) {
++		u64 code;
++
++		x = ((u64)i * DPU_FP_ONE) / (DPU_GAMMA_LUT_SIZE - 1);
++		code = dpu_pq_panel_code(x, log2_scale);
++		if (code > 0xffff)
++			code = 0xffff;
++
++		lut[i].red = code;
++		lut[i].green = code;
++		lut[i].blue = code;
++	}
++
++	/* The compositor supplied LUT is applied after the PQ conversion */
++	if (user) {
++		for (i = 0; i < DPU_GAMMA_LUT_SIZE; i++) {
++			lut[i].red = user[dpu_lut_index(lut[i].red)].red;
++			lut[i].green = user[dpu_lut_index(lut[i].green)].green;
++			lut[i].blue = user[dpu_lut_index(lut[i].blue)].blue;
++		}
++	}
++
++	return lut;
++}
++
++/*
++ * Look for a connector feeding @crtc which is being sent PQ (ST 2084) data.
++ */
++static void dpu_crtc_check_hdr(struct drm_atomic_commit *state,
++			       struct drm_crtc *crtc,
++			       struct dpu_crtc_state *cstate)
++{
++	struct drm_connector_state *conn_state;
++	struct drm_connector *conn;
++	unsigned int i;
++
++	cstate->hdr_pq = false;
++	cstate->hdr_peak_nits = 0;
++
++	for_each_new_connector_in_state(state, conn, conn_state, i) {
++		const struct hdr_output_metadata *hdr;
++		u32 peak_nits;
++
++		if (conn_state->crtc != crtc || !conn_state->hdr_output_metadata)
++			continue;
++
++		hdr = conn_state->hdr_output_metadata->data;
++		if (!hdr)
++			continue;
++
++		/*
++		 * Userselected EOTF.  Depending on the userspace it is either
++		 * the plain value or a bitmask of the supported values.
++		 */
++		if (hdr->hdmi_metadata_type1.eotf != HDMI_EOTF_SMPTE_ST2084 &&
++		    !(hdr->hdmi_metadata_type1.eotf &
++		      BIT(HDMI_EOTF_SMPTE_ST2084)))
++			continue;
++
++		peak_nits = conn->display_info.luminance_range.max_luminance;
++
++		cstate->hdr_pq = true;
++		cstate->hdr_peak_nits = peak_nits;
++		break;
++	}
++}
+ 
+ /* timeout in ms waiting for frame done */
+ #define DPU_CRTC_FRAME_DONE_TIMEOUT_MS	60
+@@ -815,14 +1085,11 @@
+ 	cfg->b.b = CONVERT_S3_15(ctm->matrix[8]);
+ }
+ 
+-static void _dpu_crtc_get_gc_lut(struct drm_crtc_state *state,
++static void _dpu_crtc_get_gc_lut(const struct drm_color_lut *lut,
+ 		struct dpu_hw_gc_lut *gc_lut)
+ {
+-	struct drm_color_lut *lut;
+ 	int i;
+ 	u32 val_even, val_odd;
+-
+-	lut = (struct drm_color_lut *)state->gamma_lut->data;
+ 
+ 	if (!lut)
+ 		return;
+@@ -848,16 +1115,30 @@
+ {
+ 	struct drm_crtc_state *state = crtc->state;
+ 	struct dpu_crtc_state *cstate = to_dpu_crtc_state(crtc->state);
++	struct dpu_crtc *dpu_crtc = to_dpu_crtc(crtc);
+ 	struct dpu_crtc_mixer *mixer = cstate->mixers;
+ 	struct dpu_hw_pcc_cfg cfg;
+ 	struct dpu_hw_gc_lut *gc_lut;
++	struct drm_color_lut *hdr_lut = NULL;
+ 	struct dpu_hw_ctl *ctl;
+ 	struct dpu_hw_dspp *dspp;
++	bool hdr_changed;
+ 	int i;
+ 
+-
+-	if (!state->color_mgmt_changed && !drm_atomic_crtc_needs_modeset(state))
++	/*
++	 * HDR is driven by the connector's HDR metadata, which does not set
++	 * color_mgmt_changed, so the blocks also have to be reprogrammed when
++	 * the HDR state changed on its own.
++	 */
++	hdr_changed = dpu_crtc->hdr_pq != cstate->hdr_pq ||
++		      dpu_crtc->hdr_peak_nits != cstate->hdr_peak_nits;
++
++	if (!hdr_changed && !state->color_mgmt_changed &&
++	    !drm_atomic_crtc_needs_modeset(state))
+ 		return;
++
++	if (cstate->hdr_pq)
++		hdr_lut = dpu_crtc_build_hdr_gc_lut(state, cstate->hdr_peak_nits);
+ 
+ 	for (i = 0; i < cstate->num_mixers; i++) {
+ 		ctl = mixer[i].lm_ctl;
+@@ -880,13 +1161,18 @@
+ 		}
+ 
+ 		if (dspp->ops.setup_gc) {
+-			if (!state->gamma_lut) {
++			const struct drm_color_lut *lut = hdr_lut;
++
++			if (!lut && state->gamma_lut)
++				lut = state->gamma_lut->data;
++
++			if (!lut) {
+ 				dspp->ops.setup_gc(dspp, NULL);
+ 			} else {
+ 				gc_lut = kzalloc_obj(*gc_lut);
+ 				if (!gc_lut)
+ 					continue;
+-				_dpu_crtc_get_gc_lut(state, gc_lut);
++				_dpu_crtc_get_gc_lut(lut, gc_lut);
+ 				dspp->ops.setup_gc(dspp, gc_lut);
+ 				kfree(gc_lut);
+ 			}
+@@ -896,6 +1182,11 @@
+ 				mixer[i].hw_dspp->idx, DPU_DSPP_GC);
+ 		}
+ 	}
++
++	kfree(hdr_lut);
++
++	dpu_crtc->hdr_pq = cstate->hdr_pq;
++	dpu_crtc->hdr_peak_nits = cstate->hdr_peak_nits;
+ }
+ 
+ static void dpu_crtc_atomic_begin(struct drm_crtc *crtc,
+@@ -1534,6 +1825,8 @@
+ 
+ 	bool needs_dirtyfb = dpu_crtc_needs_dirtyfb(crtc_state);
+ 
++	dpu_crtc_check_hdr(state, crtc, cstate);
++
+ 	/* don't reallocate resources if only ACTIVE has beeen changed */
+ 	if (crtc_state->mode_changed || crtc_state->connectors_changed ||
+ 	    crtc_state->color_mgmt_changed) {
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.h
+@@ -183,6 +183,10 @@
+ 	struct dpu_core_perf_params cur_perf;
+ 
+ 	struct dpu_crtc_smmu_state_data smmu_state;
++
++	/* Last HDR (PQ) state programmed into the DSPP gamma blocks */
++	bool hdr_pq;
++	u32 hdr_peak_nits;
+ };
+ 
+ #define to_dpu_crtc(x) container_of(x, struct dpu_crtc, base)
+@@ -225,6 +229,10 @@
+ 
+ 	enum dpu_crtc_crc_source crc_source;
+ 	int crc_frame_skip_count;
++
++	/* HDR (PQ) output derived from the connector's HDR metadata */
++	bool hdr_pq;
++	u32 hdr_peak_nits;
+ };
+ 
+ #define to_dpu_crtc_state(x) \

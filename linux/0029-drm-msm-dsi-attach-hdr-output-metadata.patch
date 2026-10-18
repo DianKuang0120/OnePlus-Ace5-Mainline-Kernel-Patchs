@@ -1,0 +1,41 @@
+--- a/drivers/gpu/drm/msm/dsi/dsi_manager.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_manager.c
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "drm/drm_bridge_connector.h"
++#include "drm/drm_connector.h"
+ 
+ #include "msm_kms.h"
+ #include "dsi.h"
+@@ -485,6 +486,30 @@
+ 		return PTR_ERR(connector);
+ 	}
+ 
++	/*
++	 * Expose the HDR_OUTPUT_METADATA property for panels that advertise
++	 * HDR support, so that userspace can drive HDR output. The DSI link
++	 * carries the pixel data as-is; tone mapping is left to userspace.
++	 *
++	 * Userspace decides whether an output supports HDR / wide gamut from
++	 * the connector properties and the EDID, so also provide a
++	 * "Colorspace" property with BT.2020 RGB (many compositors require it
++	 * to consider the output wide-gamut capable) and a "max bpc" property
++	 * for the 10 bits per component the panel is driven with.
++	 */
++	if (msm_dsi->next_bridge && msm_dsi->next_bridge->of_node &&
++	    of_property_read_bool(msm_dsi->next_bridge->of_node, "hdr-enabled")) {
++		drm_connector_attach_hdr_output_metadata_property(connector);
++
++		if (drm_mode_create_dp_colorspace_property(connector,
++				BIT(DRM_MODE_COLORIMETRY_BT2020_RGB)) == 0)
++			drm_connector_attach_colorspace_property(connector);
++
++		/* drm_connector_attach_max_bpc_property() needs a state. */
++		if (connector->funcs->reset)
++			connector->funcs->reset(connector);
++		drm_connector_attach_max_bpc_property(connector, 8, 10);
++	}
+ 
+ 	return 0;
+ }

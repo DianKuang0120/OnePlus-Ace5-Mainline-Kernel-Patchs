@@ -1,0 +1,18 @@
+[Unit]
+Description=Giulia IMS-DCM server (VoLTE data path)
+After=ModemManager.service
+Wants=ModemManager.service
+
+[Service]
+Type=simple
+User=root
+Environment=GI_TYPELIB_PATH=/home/DianKuang/openimsd-prefix/lib/girepository-1.0
+Environment=LD_LIBRARY_PATH=/home/DianKuang/openimsd-prefix/lib
+ExecStart=/usr/bin/python3 /home/DianKuang/Mainline-Kernel/Modem/dcm_server.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/giulia-ims-dcm.log
+StandardError=append:/var/log/giulia-ims-dcm.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,217 @@
+--- a/drivers/tee/qcomtee/call.c
++++ b/drivers/tee/qcomtee/call.c
+@@ -709,6 +709,7 @@
+ 	if (!qcomtee)
+ 		return -ENOMEM;
+ 
++	qcomtee->dev = &pdev->dev;
+ 	pool = qcomtee_shm_pool_alloc();
+ 	if (IS_ERR(pool)) {
+ 		err = PTR_ERR(pool);
+@@ -761,6 +762,13 @@
+ 		QTEE_VERSION_GET_MINOR(qcomtee->qtee_version),
+ 		QTEE_VERSION_GET_PATCH(qcomtee->qtee_version));
+ 
++	/* Best effort: load the fingerprint TA if its firmware is present. */
++	qcomtee_fp_load(qcomtee);
++	err = qcomtee_fp_init(qcomtee);
++	if (err)
++		pr_warn("failed to create fingerprint command device: %d\n",
++			err);
++
+ 	return 0;
+ 
+ err_dest_wq:
+@@ -790,6 +798,21 @@
+ {
+ 	struct qcomtee *qcomtee = platform_get_drvdata(pdev);
+ 
++	qcomtee_fp_exit(qcomtee);
++
++	if (qcomtee->fp_ctl) {
++		qcomtee_object_put(qcomtee->fp_ctl);
++		qcomtee->fp_ctl = NULL;
++	}
++	if (qcomtee->fp_spi_ctl) {
++		qcomtee_object_put(qcomtee->fp_spi_ctl);
++		qcomtee->fp_spi_ctl = NULL;
++	}
++	if (qcomtee->fp_jv_region) {
++		qcomtee_object_put(qcomtee->fp_jv_region);
++		qcomtee->fp_jv_region = NULL;
++	}
++
+ 	teedev_close_context(qcomtee->ctx);
+ 	/* Wait for RELEASE operations to be processed for QTEE objects. */
+ 	tee_device_unregister(qcomtee->teedev);
+--- a/drivers/tee/qcomtee/Makefile
++++ b/drivers/tee/qcomtee/Makefile
+@@ -3,6 +3,7 @@
+ qcomtee-objs += async.o
+ qcomtee-objs += call.o
+ qcomtee-objs += core.o
++qcomtee-objs += fp_loader.o
+ qcomtee-objs += mem_obj.o
+ qcomtee-objs += primordial_obj.o
+ qcomtee-objs += shm.o
+--- a/drivers/tee/qcomtee/mem_obj.c
++++ b/drivers/tee/qcomtee/mem_obj.c
+@@ -6,6 +6,7 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <linux/firmware/qcom/qcom_scm.h>
++#include <linux/firmware/qcom/qcom_tzmem.h>
+ #include <linux/mm.h>
+ 
+ #include "qcomtee.h"
+@@ -35,6 +36,9 @@
+ struct qcomtee_mem_object {
+ 	struct qcomtee_object object;
+ 	struct tee_shm *shm;
++	/* TZ memory object alternative to tee_shm (for large firmware). */
++	struct qcom_tzmem_pool *tzmem_pool;
++	void *tzmem_base;
+ 	/* QTEE requires these felids to be page aligned. */
+ 	phys_addr_t paddr; /* Physical address of range. */
+ 	size_t size; /* Size of the range. */
+@@ -64,8 +68,13 @@
+ {
+ 	struct qcomtee_mem_object *mem_object = to_qcomtee_mem_object(object);
+ 
+-	/* Matching get is in qcomtee_memobj_param_to_object(). */
+-	tee_shm_put(mem_object->shm);
++	if (mem_object->shm) {
++		/* Matching get is in qcomtee_memobj_param_to_object(). */
++		tee_shm_put(mem_object->shm);
++	} else {
++		qcom_tzmem_free(mem_object->tzmem_base);
++		qcom_tzmem_pool_free(mem_object->tzmem_pool);
++	}
+ 	kfree(mem_object);
+ }
+ 
+@@ -119,6 +128,64 @@
+ 	return 0;
+ }
+ 
++/*
++ * qcomtee_memobj_tzmem_init() - create a memory object from a TZ memory pool.
++ * The object owns @base and @pool; @aligned is the (possibly 4M-aligned)
++ * image within it and @size is the image length exposed to QTEE.
++ */
++int qcomtee_memobj_tzmem_init(struct qcomtee_object **object,
++			      struct qcom_tzmem_pool *pool,
++			      void *base, void *aligned, size_t size)
++{
++	struct qcomtee_mem_object *mem_object __free(kfree) =
++		kzalloc_obj(*mem_object);
++	int err;
++
++	if (!mem_object)
++		return -ENOMEM;
++
++	err = qcomtee_object_user_init(&mem_object->object,
++				       QCOMTEE_OBJECT_TYPE_CB,
++				       &qcomtee_mem_object_ops, "tzmem-%zu",
++				       size);
++	if (err)
++		return err;
++
++	mem_object->paddr = qcom_tzmem_to_phys(aligned);
++	mem_object->size = size;
++	mem_object->tzmem_pool = pool;
++	mem_object->tzmem_base = base;
++
++	*object = &no_free_ptr(mem_object)->object;
++	return 0;
++}
++
++/* Create a memory object that owns one reference to @shm. */
++int qcomtee_memobj_shm_init(struct qcomtee_object **object,
++			    struct tee_shm *shm)
++{
++	struct qcomtee_mem_object *mem_object __free(kfree) =
++		kzalloc_obj(*mem_object);
++	int err;
++
++	if (!mem_object)
++		return -ENOMEM;
++
++	err = qcomtee_object_user_init(&mem_object->object,
++				       QCOMTEE_OBJECT_TYPE_CB,
++				       &qcomtee_mem_object_ops, "tee-shm-%d",
++				       shm->id);
++	if (err)
++		return err;
++
++	mem_object->paddr = shm->paddr;
++	mem_object->size = shm->size;
++	mem_object->shm = shm;
++	*object = &no_free_ptr(mem_object)->object;
++
++	return 0;
++}
++
+ /* Reverse what qcomtee_memobj_param_to_object() does. */
+ int qcomtee_memobj_param_from_object(struct tee_param *param,
+ 				     struct qcomtee_object *object,
+@@ -128,7 +195,7 @@
+ 
+ 	mem_object = to_qcomtee_mem_object(object);
+ 	/* Sure if the memobj is in a same context it is originated from. */
+-	if (mem_object->shm->ctx != ctx)
++	if (!mem_object->shm || mem_object->shm->ctx != ctx)
+ 		return -EINVAL;
+ 
+ 	param->u.objref.id = mem_object->shm->id;
+--- a/drivers/tee/qcomtee/qcomtee.h
++++ b/drivers/tee/qcomtee/qcomtee.h
+@@ -7,6 +7,7 @@
+ #define QCOMTEE_H
+ 
+ #include <linux/kobject.h>
++#include <linux/miscdevice.h>
+ #include <linux/tee_core.h>
+ 
+ #include "qcomtee_msg.h"
+@@ -29,6 +30,7 @@
+  * @qtee_version: QTEE version.
+  */
+ struct qcomtee {
++	struct device *dev;
+ 	struct tee_device *teedev;
+ 	struct tee_shm_pool *pool;
+ 	struct tee_context *ctx;
+@@ -37,8 +39,16 @@
+ 	struct xarray xa_local_objects;
+ 	u32 xa_last_id;
+ 	u32 qtee_version;
++	/* Loaded QSEEComCompat app controllers/regions, if any. */
++	struct qcomtee_object *fp_spi_ctl;
++	struct qcomtee_object *fp_jv_region;
++	struct qcomtee_object *fp_ctl;
++	struct miscdevice fp_misc;
++	bool fp_misc_ok;
+ };
+ 
++int qcomtee_fp_load(struct qcomtee *qtee);
++int qcomtee_fp_init(struct qcomtee *qtee);
++void qcomtee_fp_exit(struct qcomtee *qtee);
++
+ void qcomtee_fetch_async_reqs(struct qcomtee_object_invoke_ctx *oic);
+ struct qcomtee_object *qcomtee_idx_erase(struct qcomtee_object_invoke_ctx *oic,
+ 					 u32 idx);
+@@ -163,6 +173,13 @@
+ 				   struct tee_param *param,
+ 				   struct tee_context *ctx);
+ 
++struct qcom_tzmem_pool;
++int qcomtee_memobj_tzmem_init(struct qcomtee_object **object,
++			      struct qcom_tzmem_pool *pool,
++			      void *base, void *aligned, size_t size);
++int qcomtee_memobj_shm_init(struct qcomtee_object **object,
++			    struct tee_shm *shm);
++
+ /* Reverse what qcomtee_memobj_param_to_object() does. */
+ int qcomtee_memobj_param_from_object(struct tee_param *param,
+ 				     struct qcomtee_object *object,
